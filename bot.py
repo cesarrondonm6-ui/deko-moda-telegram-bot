@@ -5,6 +5,9 @@ import logging
 import subprocess
 from pathlib import Path
 
+from dotenv import load_dotenv
+load_dotenv()
+
 import anthropic
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import (
