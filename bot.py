@@ -479,8 +479,17 @@ def main() -> None:
     app.add_handler(conv)
     app.add_error_handler(error_handler)
 
-    logger.info("Bot Deko iniciado. Esperando mensajes...")
-    app.run_polling(allowed_updates=Update.ALL_TYPES)
+    port = int(os.getenv("PORT", "8000"))
+    webhook_url = "https://web-production-f7d03.up.railway.app/webhook"
+
+    logger.info("Bot Deko iniciado en modo webhook (puerto %s).", port)
+    app.run_webhook(
+        listen="0.0.0.0",
+        port=port,
+        url_path="webhook",
+        webhook_url=webhook_url,
+        allowed_updates=Update.ALL_TYPES,
+    )
 
 
 if __name__ == "__main__":
