@@ -1,5 +1,6 @@
 import os
 import re
+import sys
 import json
 import logging
 import subprocess
@@ -383,9 +384,9 @@ async def confirmar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         ref_file = await context.bot.get_file(foto_ref_id)
         await ref_file.download_to_drive(str(carpeta / "referencia_pinterest.jpg"))
 
-        # 4. Disparar pipeline monitor_productos.py
+        # 4. Disparar pipeline
         proc = subprocess.run(
-            ["python", str(PIPELINE_SCRIPT), nombre],
+            [sys.executable, str(PIPELINE_SCRIPT), nombre],
             capture_output=True,
             text=True,
             timeout=300,
@@ -393,34 +394,31 @@ async def confirmar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
         if proc.returncode == 0:
             await update.message.reply_text(
-                f"Estilo *{nombre}* procesado exitosamente!\n\n"
-                f"Carpeta: `{carpeta}`\n"
+                f"Estilo {nombre} procesado exitosamente!\n\n"
+                f"Carpeta: {carpeta}\n"
                 f"Colores: {', '.join(colores)}\n"
                 f"Proveedor: {proveedor}\n\n"
-                "El pipeline finalizó sin errores.",
-                parse_mode="Markdown",
+                "El pipeline finalizo sin errores."
             )
         else:
             stderr_preview = (proc.stderr or "Sin detalle")[:600]
+            logger.error("Pipeline error [%s]: %s", nombre, proc.stderr)
             await update.message.reply_text(
-                f"Estilo *{nombre}* guardado, pero el pipeline reportó errores:\n\n"
-                f"`{stderr_preview}`\n\n"
-                f"Archivos en: `{carpeta}`",
-                parse_mode="Markdown",
+                f"Estilo {nombre} guardado, pero el pipeline reporto errores:\n\n"
+                f"{stderr_preview}\n\n"
+                f"Archivos en: {carpeta}"
             )
 
     except subprocess.TimeoutExpired:
         await update.message.reply_text(
-            f"El pipeline tardó demasiado (>5 min).\n"
-            f"Archivos guardados en: `{carpeta}`\n"
-            "Ejecuta el pipeline manualmente.",
-            parse_mode="Markdown",
+            f"El pipeline tardo demasiado (mas de 5 min).\n"
+            f"Archivos guardados en: {carpeta}\n"
+            "Ejecuta el pipeline manualmente."
         )
     except Exception as exc:
-        logger.error("Error procesando %s: %s", nombre, exc)
+        logger.error("Error procesando %s: %s", nombre, exc, exc_info=True)
         await update.message.reply_text(
-            f"Error al procesar el estilo:\n`{exc}`\n\nContacta al administrador.",
-            parse_mode="Markdown",
+            f"Error al procesar el estilo {nombre}:\n\n{exc}\n\nContacta al administrador."
         )
 
     context.user_data.clear()
