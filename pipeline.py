@@ -217,7 +217,7 @@ def generar_imagen(prompt, zapato_img):
     if gemini_client is None:
         raise RuntimeError("GEMINI_KEY no configurado")
     response = gemini_client.models.generate_content(
-        model="gemini-3-pro-image-preview", contents=[prompt, zapato_img])
+        model="gemini-2.5-flash-image", contents=[prompt, zapato_img])
     for part in response.candidates[0].content.parts:
         if hasattr(part, "inline_data") and part.inline_data:
             img_bytes = part.inline_data.data
