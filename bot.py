@@ -457,20 +457,22 @@ async def confirmar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
             timeout=300,
         )
 
+        # Volcar salida del pipeline a los logs de Railway
+        if proc.stdout:
+            logger.info("Pipeline stdout [%s]:\n%s", nombre, proc.stdout[:2000])
+        if proc.stderr:
+            logger.error("Pipeline stderr [%s]:\n%s", nombre, proc.stderr[:2000])
+
         if proc.returncode == 0:
             await update.message.reply_text(
                 f"Estilo {nombre} procesado exitosamente!\n"
                 f"Colores: {', '.join(colores)} | Proveedor: {proveedor}"
             )
-            # Enviar imágenes generadas al chat
             await _enviar_imagenes_generadas(update, context, carpeta, nombre, colores)
         else:
-            stderr_preview = (proc.stderr or "Sin detalle")[:600]
-            logger.error("Pipeline error [%s]: %s", nombre, proc.stderr)
+            stderr_preview = (proc.stderr or proc.stdout or "Sin detalle")[:800]
             await update.message.reply_text(
-                f"Estilo {nombre} guardado, pero el pipeline reporto errores:\n\n"
-                f"{stderr_preview}\n\n"
-                f"Archivos en: {carpeta}"
+                f"Estilo {nombre} - pipeline con errores:\n\n{stderr_preview}"
             )
 
     except subprocess.TimeoutExpired:
