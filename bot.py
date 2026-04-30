@@ -111,7 +111,10 @@ Estructura de respuesta:
 
 Reglas de validación:
 - precio: número positivo (sin símbolo de moneda)
-- tallas: lista separada por comas (ej: 35,36,37,38) O rango con guión (ej: 35-40); ambos formatos son válidos
+- tallas: acepta DOS formatos, ambos son VÁLIDOS:
+    Formato 1 - Rango con guión: "35-40" significa tallas del 35 al 40 inclusive
+    Formato 2 - Lista con comas: "35,36,37,38" lista específica de tallas
+    IMPORTANTE: NO rechaces el formato con guión. "35-40" es completamente válido.
 - altura_suela: incluye unidad cm o mm (ej: 3cm)
 - plantilla_confort y cordon: si | no
 - ocasion: casual | formal | deportivo | elegante | trabajo
