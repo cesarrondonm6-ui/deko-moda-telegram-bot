@@ -28,17 +28,14 @@ BASE_DIR = Path("C:/Deko_Automatizacion")
 PRODUCTOS_DIR = BASE_DIR / "productos"
 PIPELINE_SCRIPT = BASE_DIR / "monitor_productos.py"
 
-# ── Credenciales ───────────────────────────────────────────────────────────────
-BOT_TOKEN = "8747494582:AAH6sn0tgXOgckQUaZab91YsYF89nQ2oeVw"
+# ── Credenciales (variables de entorno) ────────────────────────────────────────
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
+CHAT_ID = os.getenv("CHAT_ID")
+SHOPIFY_TOKEN = os.getenv("SHOPIFY_TOKEN")
 
-with open(BASE_DIR / "credentials.json", encoding="utf-8") as _f:
-    _creds = json.load(_f)
-ANTHROPIC_API_KEY: str = _creds["ANTHROPIC_API_KEY"]
-CHAT_ID: str = str(_creds["CHAT_ID"])
-
-with open(BASE_DIR / "shopify_config.json", encoding="utf-8") as _f:
-    _shopify = json.load(_f)
-SHOPIFY_TOKEN: str = _shopify["SHOPIFY_TOKEN"]
+if not all([BOT_TOKEN, ANTHROPIC_API_KEY, CHAT_ID, SHOPIFY_TOKEN]):
+    raise ValueError("Faltan variables de entorno: BOT_TOKEN, ANTHROPIC_API_KEY, CHAT_ID, SHOPIFY_TOKEN")
 
 # ── Estados de la conversación ─────────────────────────────────────────────────
 (
