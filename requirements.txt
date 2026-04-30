@@ -2,3 +2,5 @@ python-telegram-bot[webhooks]==21.1
 anthropic
 requests
 python-dotenv
+google-genai
+Pillow

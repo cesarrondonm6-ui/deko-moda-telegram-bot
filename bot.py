@@ -27,9 +27,8 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ── Rutas base ─────────────────────────────────────────────────────────────────
-BASE_DIR = Path("C:/Deko_Automatizacion")
-PRODUCTOS_DIR = BASE_DIR / "productos"
-PIPELINE_SCRIPT = BASE_DIR / "monitor_productos.py"
+PRODUCTOS_DIR = Path(os.getenv("PRODUCTOS_DIR", "/app/data/productos"))
+PIPELINE_SCRIPT = Path("/app/pipeline.py")
 
 # ── Credenciales (variables de entorno) ────────────────────────────────────────
 BOT_TOKEN = os.getenv("BOT_TOKEN")
