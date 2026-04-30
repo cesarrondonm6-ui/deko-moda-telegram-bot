@@ -183,10 +183,9 @@ def _construir_resumen(ud: dict) -> str:
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data.clear()
     await update.message.reply_text(
-        "Hola! Soy el bot de *Deko Automatización*.\n\n"
+        "Hola! Soy el bot de Deko Automatizacion.\n\n"
         "Vamos a registrar un nuevo estilo.\n\n"
-        "Ingresa el *nombre del estilo*:",
-        parse_mode="Markdown",
+        "Ingresa el nombre del estilo:",
     )
     return NOMBRE
 
@@ -205,8 +204,7 @@ async def recibir_nombre(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         datos={},
     )
     await update.message.reply_text(
-        f"Estilo: *{nombre}*\n\n¿Cuántos colores tiene este estilo?",
-        parse_mode="Markdown",
+        f"Estilo: {nombre}\n\n¿Cuántos colores tiene este estilo?",
     )
     return CANTIDAD_COLORES
 
@@ -222,10 +220,9 @@ async def recibir_cantidad_colores(update: Update, context: ContextTypes.DEFAULT
 
     formato = "\n".join(f"{c}: " for c in CAMPOS_REQUERIDOS)
     await update.message.reply_text(
-        f"Colores: *{cantidad}*\n\n"
+        f"Colores: {cantidad}\n\n"
         "Ahora ingresa los datos del estilo con este formato:\n\n"
-        f"`{formato}`",
-        parse_mode="Markdown",
+        f"{formato}",
     )
     return DATOS
 
@@ -261,8 +258,7 @@ async def recibir_datos(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     except Exception as exc:
         logger.error("Error llamando a Claude: %s", exc)
         await update.message.reply_text(
-            f"Error de validación: `{exc}`\n\nReintenta o usa /cancelar.",
-            parse_mode="Markdown",
+            f"Error de validación: {exc}\n\nReintenta o usa /cancelar.",
         )
         return DATOS
 
@@ -279,13 +275,12 @@ async def recibir_datos(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     cantidad = context.user_data["cantidad_colores"]
     nota_sug = ""
     if sugerencias:
-        nota_sug = "\n*Sugerencias:*\n" + "\n".join(f"  • {s}" for s in sugerencias) + "\n"
+        nota_sug = "\nSugerencias:\n" + "\n".join(f"  • {s}" for s in sugerencias) + "\n"
 
     await update.message.reply_text(
         f"Datos validados correctamente.\n{nota_sug}\n"
-        f"Ahora envía las *{cantidad}* fotos de colores.\n\n"
-        "Envía cada foto con el *nombre del color* en el caption.",
-        parse_mode="Markdown",
+        f"Ahora envía las {cantidad} fotos de colores.\n\n"
+        "Envía cada foto con el nombre del color en el caption.",
     )
     return FOTOS_COLOR
 
@@ -293,17 +288,15 @@ async def recibir_datos(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
 async def recibir_foto_color(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if not update.message.photo:
         await update.message.reply_text(
-            "Envía una *foto* con el nombre del color en el caption.",
-            parse_mode="Markdown",
+            "Envía una foto con el nombre del color en el caption.",
         )
         return FOTOS_COLOR
 
     caption = (update.message.caption or "").strip()
     if not caption:
         await update.message.reply_text(
-            "La foto necesita el *nombre del color* en el caption.\n"
+            "La foto necesita el nombre del color en el caption.\n"
             "Reenvía la foto con el color escrito.",
-            parse_mode="Markdown",
         )
         return FOTOS_COLOR
 
@@ -313,8 +306,7 @@ async def recibir_foto_color(update: Update, context: ContextTypes.DEFAULT_TYPE)
     ud = context.user_data
     if color in ud["fotos"]:
         await update.message.reply_text(
-            f"Ya registraste el color *{color}*. Envía uno diferente.",
-            parse_mode="Markdown",
+            f"Ya registraste el color {color}. Envía uno diferente.",
         )
         return FOTOS_COLOR
 
@@ -327,17 +319,15 @@ async def recibir_foto_color(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if recibidos < esperados:
         restantes = esperados - recibidos
         await update.message.reply_text(
-            f"Color *{color}* registrado. Faltan *{restantes}* foto(s).\n\n"
+            f"Color {color} registrado. Faltan {restantes} foto(s).\n\n"
             "Envía la siguiente foto con el color en el caption.",
-            parse_mode="Markdown",
         )
         return FOTOS_COLOR
 
     await update.message.reply_text(
-        f"Color *{color}* registrado.\n\n"
+        f"Color {color} registrado.\n\n"
         "Todas las fotos de colores recibidas!\n\n"
-        "Ahora envía la *foto de referencia de Pinterest*.",
-        parse_mode="Markdown",
+        "Ahora envía la foto de referencia de Pinterest.",
     )
     return FOTO_REFERENCIA
 
@@ -423,7 +413,7 @@ async def confirmar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         return ConversationHandler.END
 
     if respuesta != "SI":
-        await update.message.reply_text("Responde *SI* o *NO*.", parse_mode="Markdown")
+        await update.message.reply_text("Responde SI o NO.")
         return CONFIRMACION
 
     await update.message.reply_text("Procesando...", reply_markup=ReplyKeyboardRemove())
