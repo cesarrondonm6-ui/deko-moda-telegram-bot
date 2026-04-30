@@ -111,7 +111,7 @@ Estructura de respuesta:
 
 Reglas de validación:
 - precio: número positivo (sin símbolo de moneda)
-- tallas: números separados por comas (ej: 35,36,37)
+- tallas: lista separada por comas (ej: 35,36,37,38) O rango con guión (ej: 35-40); ambos formatos son válidos
 - altura_suela: incluye unidad cm o mm (ej: 3cm)
 - plantilla_confort y cordon: si | no
 - ocasion: casual | formal | deportivo | elegante | trabajo
