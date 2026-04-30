@@ -355,6 +355,43 @@ async def recibir_foto_referencia(update: Update, context: ContextTypes.DEFAULT_
     return CONFIRMACION
 
 
+async def _enviar_imagenes_generadas(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    carpeta: Path,
+    nombre: str,
+    colores: list,
+) -> None:
+    """Envía al chat el collage y las imágenes web_lateral generadas."""
+    output_dir = carpeta / "imagenes_generadas"
+    if not output_dir.exists():
+        return
+
+    chat_id = update.effective_chat.id
+
+    # 1. Collage
+    collage = output_dir / f"{nombre}_collage.jpg"
+    if collage.exists():
+        with open(collage, "rb") as f:
+            await context.bot.send_photo(chat_id=chat_id, photo=f, caption=f"Collage {nombre}")
+
+    # 2. Web lateral por color
+    for color in colores:
+        web = output_dir / f"{nombre}_{color}_web_lateral.jpg"
+        if web.exists():
+            with open(web, "rb") as f:
+                await context.bot.send_photo(chat_id=chat_id, photo=f, caption=f"{nombre} - {color} (web lateral)")
+
+    # 3. Fotos de escena (cuerpo completo) por color
+    for color in colores:
+        for sufijo in ["", "_close"]:
+            escena = output_dir / f"{nombre}_{color}_1{sufijo}.jpg"
+            if escena.exists():
+                label = "close" if sufijo else "escena"
+                with open(escena, "rb") as f:
+                    await context.bot.send_photo(chat_id=chat_id, photo=f, caption=f"{nombre} - {color} ({label})")
+
+
 async def confirmar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     respuesta = update.message.text.strip().upper()
 
@@ -403,12 +440,11 @@ async def confirmar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
         if proc.returncode == 0:
             await update.message.reply_text(
-                f"Estilo {nombre} procesado exitosamente!\n\n"
-                f"Carpeta: {carpeta}\n"
-                f"Colores: {', '.join(colores)}\n"
-                f"Proveedor: {proveedor}\n\n"
-                "El pipeline finalizo sin errores."
+                f"Estilo {nombre} procesado exitosamente!\n"
+                f"Colores: {', '.join(colores)} | Proveedor: {proveedor}"
             )
+            # Enviar imágenes generadas al chat
+            await _enviar_imagenes_generadas(update, context, carpeta, nombre, colores)
         else:
             stderr_preview = (proc.stderr or "Sin detalle")[:600]
             logger.error("Pipeline error [%s]: %s", nombre, proc.stderr)

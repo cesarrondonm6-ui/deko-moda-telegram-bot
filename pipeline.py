@@ -790,7 +790,7 @@ def crear_en_shopify(nombre, producto_dir, colores, precio, output_dir):
 
     print("  Shopify: subiendo imagenes...")
     for color in colores:
-        img = output_dir / f"{nombre}_{color}_web_lateral_pp.jpg"
+        img = output_dir / f"{nombre}_{color}_web_lateral.jpg"
         if not img.exists():
             print(f"    [{color}] imagen no encontrada, saltando")
             continue
@@ -913,7 +913,7 @@ def procesar_producto(producto_dir):
         _actualizar_precio(producto_dir, procesar_data["precio"])
 
     desc_ok = (producto_dir / "descripcion_shopify.txt").exists()
-    web_ok  = any((output_dir / f"{nombre}_{c}_web_lateral_pp.jpg").exists() for c in colores_todos)
+    web_ok  = any((output_dir / f"{nombre}_{c}_web_lateral.jpg").exists() for c in colores_todos)
     precio_shopify = procesar_data.get("precio", "0")
     if desc_ok and web_ok and SHOPIFY_TOKEN:
         try:
