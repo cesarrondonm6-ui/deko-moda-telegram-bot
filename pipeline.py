@@ -1,5 +1,15 @@
 import os
 import sys
+import json
+import re
+import time
+import math
+import base64
+import urllib.request
+import urllib.error
+from io import BytesIO
+from pathlib import Path
+
 import google.genai as genai
 import anthropic
 import PIL.Image
@@ -7,38 +17,68 @@ import PIL.ImageChops
 import PIL.ImageDraw
 import PIL.ImageFont
 import PIL.ImageFilter
-from io import BytesIO
-from pathlib import Path
-import base64
-import re
-import json
-import time
-import math
-import urllib.request
-import urllib.error
 
-# ── Credenciales desde variables de entorno ─────────────────────────────────
-GEMINI_KEY    = os.getenv("GEMINI_KEY", "")
-ANTHROPIC_KEY = os.getenv("ANTHROPIC_KEY", "")
+# ── Detección de entorno ──────────────────────────────────────────────────────
+EN_RAILWAY = os.getenv("RAILWAY_ENVIRONMENT") is not None
 
-SHOPIFY_TOKEN    = os.getenv("SHOPIFY_TOKEN", "")
-SHOPIFY_SHOP     = os.getenv("SHOPIFY_SHOP", "")
+if EN_RAILWAY:
+    BASE_DIR      = "/app/data"
+    GEMINI_KEY    = os.getenv("GEMINI_KEY", "")
+    ANTHROPIC_KEY = os.getenv("ANTHROPIC_KEY", "")
+    SHOPIFY_TOKEN = os.getenv("SHOPIFY_TOKEN", "")
+    SHOPIFY_SHOP  = os.getenv("SHOPIFY_SHOP", "")
+    TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
+    TELEGRAM_CHAT  = os.getenv("TELEGRAM_CHAT", "")
+else:
+    BASE_DIR = "C:/Deko_Automatizacion"
+    _creds_path = Path(BASE_DIR) / "credentials.json"
+    _creds = json.loads(_creds_path.read_text(encoding="utf-8")) if _creds_path.exists() else {}
+    GEMINI_KEY    = _creds.get("GEMINI_KEY",      os.getenv("GEMINI_KEY", ""))
+    ANTHROPIC_KEY = _creds.get("ANTHROPIC_API_KEY", os.getenv("ANTHROPIC_KEY", ""))
+
+    _shopify_path = Path(BASE_DIR) / "shopify_config.json"
+    _scfg = json.loads(_shopify_path.read_text(encoding="utf-8")) if _shopify_path.exists() else {}
+    SHOPIFY_TOKEN = _scfg.get("access_token", "")
+    SHOPIFY_SHOP  = _scfg.get("shop_name", "")
+
+    TELEGRAM_TOKEN = _creds.get("telegram_bot_token", os.getenv("TELEGRAM_TOKEN", ""))
+    TELEGRAM_CHAT  = str(_creds.get("telegram_chat_id", os.getenv("TELEGRAM_CHAT", "")))
+
+# Derivadas comunes
 SHOPIFY_BASE_URL = f"https://{SHOPIFY_SHOP}.myshopify.com/admin/api/2024-01" if SHOPIFY_SHOP else ""
+PRODUCTOS_DIR    = Path(BASE_DIR) / "productos"
 
-TELEGRAM_TOKEN = os.getenv("BOT_TOKEN", "")
-TELEGRAM_CHAT  = os.getenv("CHAT_ID", "")
+# Fuentes: rutas según SO
+COLLAGE_FONT_PATHS = (
+    [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSerif-Bold.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSerif-Bold.ttf",
+        "/usr/share/fonts/truetype/freefont/FreeSerifBold.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+    ] if EN_RAILWAY else [
+        "C:/Windows/Fonts/georgiab.ttf",
+        "C:/Windows/Fonts/calibrib.ttf",
+        "C:/Windows/Fonts/arialbd.ttf",
+        "C:/Windows/Fonts/arial.ttf",
+    ]
+)
 
-# ── Rutas ─────────────────────────────────────────────────────────────────────
-PRODUCTOS_DIR = Path(os.getenv("PRODUCTOS_DIR", "/app/data/productos"))
-
-# ── Clientes API ─────────────────────────────────────────────────────────────
+# ── Clientes API ──────────────────────────────────────────────────────────────
 gemini_client = genai.Client(api_key=GEMINI_KEY) if GEMINI_KEY else None
 claude_client = anthropic.Anthropic(api_key=ANTHROPIC_KEY) if ANTHROPIC_KEY else None
 
+# ── Constantes ────────────────────────────────────────────────────────────────
 SHOPIFY_TALLAS = [str(t) for t in range(35, 43)]
+INFO_FIELDS    = {"material", "altura_suela", "plantilla_confort", "ocasion", "tipo_calzado", "proveedor"}
 
-INFO_FIELDS = {"material", "altura_suela", "plantilla_confort", "ocasion", "tipo_calzado", "proveedor"}
+COLLAGE_HEADER    = 110
+COLLAGE_TARGET_W  = 560
+COLLAGE_FONT_SIZE = 92
+COLLAGE_RATIO     = 5 / 4
+COLLAGE_GOLD      = (201, 168, 76)
+COLLAGE_HEADER_BG = (245, 240, 235)
 
+# ── Prompts ───────────────────────────────────────────────────────────────────
 PROMPT_MAESTRO = """Analiza la imagen y genera PROMPT FINAL para Nanobanana.
 Imagen de cuerpo completo, mostrando la figura entera de la modelo desde la cabeza hasta los pies.
 NO describir el zapato.
@@ -141,22 +181,8 @@ Tallas: 35 a 42
 
 Genera una descripcion que incluya beneficios, materiales, comodidad, ocasion de uso. Maximo 250 palabras. Optimiza para conversion."""
 
-# ── Fuentes: rutas Linux (Railway/Ubuntu) con fallback ───────────────────────
-COLLAGE_FONT_PATHS = [
-    "/usr/share/fonts/truetype/dejavu/DejaVuSerif-Bold.ttf",
-    "/usr/share/fonts/truetype/liberation/LiberationSerif-Bold.ttf",
-    "/usr/share/fonts/truetype/freefont/FreeSerifBold.ttf",
-    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-]
 
-COLLAGE_HEADER    = 110
-COLLAGE_TARGET_W  = 560
-COLLAGE_FONT_SIZE = 92
-COLLAGE_RATIO     = 5 / 4
-COLLAGE_GOLD      = (201, 168, 76)
-COLLAGE_HEADER_BG = (245, 240, 235)
-
-
+# ── Análisis de referencia ────────────────────────────────────────────────────
 def _analizar_con_prompt(referencia_path, prompt_template, label):
     print(f"  Analizando referencia ({label})...")
     ext = referencia_path.suffix.lower().replace(".", "")
@@ -177,6 +203,8 @@ def analizar_referencia(referencia_path):
 def analizar_referencia_close(referencia_path):
     return _analizar_con_prompt(referencia_path, PROMPT_MAESTRO_CLOSE, "plano cerrado")
 
+
+# ── Generación de imágenes ────────────────────────────────────────────────────
 def generar_imagen(prompt, zapato_img):
     response = gemini_client.models.generate_content(
         model="gemini-3-pro-image-preview", contents=[prompt, zapato_img])
@@ -249,7 +277,7 @@ def _generar_variante(prompt, zapato_img, archivo_original, output_dir, nombre_b
         print(f"  [{sufijo}] Ya existe, saltando: {output.name}")
         return
     img_bytes = None
-    aprobada = False
+    aprobada  = False
     for intento in range(1, 4):
         print(f"  [{sufijo}] Intento {intento}/3...")
         try:
@@ -257,9 +285,10 @@ def _generar_variante(prompt, zapato_img, archivo_original, output_dir, nombre_b
             if not img_bytes:
                 continue
             qa = verificar_imagen(archivo_original, img_bytes)
-            c = qa.get("criterios", {})
+            c  = qa.get("criterios", {})
             aprobada = qa.get("aprobada", False)
-            print(f"  [{sufijo}] Zapato:{c.get('zapato_visible')} Plano:{c.get('plano_cerrado')} Ambos:{c.get('ambos_zapatos_visibles')} Fiel:{c.get('zapato_fiel_al_original')}")
+            print(f"  [{sufijo}] Zapato:{c.get('zapato_visible')} Plano:{c.get('plano_cerrado')} "
+                  f"Ambos:{c.get('ambos_zapatos_visibles')} Fiel:{c.get('zapato_fiel_al_original')}")
             if aprobada:
                 output = output_dir / f"{nombre_base}{sufijo}.jpg"
                 open(output, "wb").write(img_bytes)
@@ -272,44 +301,42 @@ def _generar_variante(prompt, zapato_img, archivo_original, output_dir, nombre_b
                 print(f"  [{sufijo}] RECHAZADA: {qa.get('motivo_rechazo','')}")
         except Exception as e:
             print(f"  [{sufijo}] Error: {e}")
-
     if not aprobada and img_bytes:
         output = output_dir / f"{nombre_base}{sufijo}_REVISAR.jpg"
         open(output, "wb").write(img_bytes)
         print(f"  [{sufijo}] REVISAR: {output.name}")
 
+
+# ── Collage ───────────────────────────────────────────────────────────────────
 def _apunta_izquierda(img):
-    gray = img.convert("L").filter(PIL.ImageFilter.GaussianBlur(radius=3))
+    gray  = img.convert("L").filter(PIL.ImageFilter.GaussianBlur(radius=3))
     edges = gray.filter(PIL.ImageFilter.FIND_EDGES)
-    w, h = edges.size
+    w, h  = edges.size
     pixels = edges.load()
     left_sum = right_sum = 0
     mid = w // 2
     for y in range(0, h, 5):
         for x in range(0, w, 5):
             v = pixels[x, y]
-            if x < mid:
-                left_sum += v
-            else:
-                right_sum += v
+            if x < mid: left_sum += v
+            else:        right_sum += v
     return left_sum > right_sum
 
 def _fill_cell(img, cell_w, cell_h):
     iw, ih = img.size
-    scale = max(cell_w / iw, cell_h / ih)
+    scale  = max(cell_w / iw, cell_h / ih)
     new_w, new_h = round(iw * scale), round(ih * scale)
     img_s = img.resize((new_w, new_h), PIL.Image.LANCZOS)
-    left = (new_w - cell_w) // 2
-    top  = (new_h - cell_h) // 2
+    left  = (new_w - cell_w) // 2
+    top   = (new_h - cell_h) // 2
     return img_s.crop((left, top, left + cell_w, top + cell_h))
 
 def _estimar_cobertura_zapato(img):
-    gray = img.convert("L").filter(PIL.ImageFilter.GaussianBlur(radius=2))
+    gray  = img.convert("L").filter(PIL.ImageFilter.GaussianBlur(radius=2))
     edges = gray.filter(PIL.ImageFilter.FIND_EDGES)
-    w, h = edges.size
+    w, h  = edges.size
     pixels = edges.load()
-    threshold = 20
-    count = sum(1 for y in range(0, h, 3) for x in range(0, w, 3) if pixels[x, y] > threshold)
+    count = sum(1 for y in range(0, h, 3) for x in range(0, w, 3) if pixels[x, y] > 20)
     total = (h // 3) * (w // 3)
     return count / total if total > 0 else 0
 
@@ -324,8 +351,8 @@ def _verificar_consistencia_close(imagenes, producto_dir, nombre, output_dir):
     if len(imagenes) < 2:
         return imagenes
     coberturas = {p: _estimar_cobertura_zapato(PIL.Image.open(p)) for p in imagenes}
-    promedio = sum(coberturas.values()) / len(coberturas)
-    umbral = promedio * 0.6
+    promedio   = sum(coberturas.values()) / len(coberturas)
+    umbral     = promedio * 0.6
     prompt_close_path = producto_dir / "prompt_nanobanana_close.txt"
     if not prompt_close_path.exists():
         return imagenes
@@ -335,10 +362,11 @@ def _verificar_consistencia_close(imagenes, producto_dir, nombre, output_dir):
         print(f"  Cobertura {img_path.name}: {cob:.3f} (promedio: {promedio:.3f})")
         if cob < umbral:
             print(f"  REGENERANDO {img_path.name} (cobertura baja)")
-            m = re.search(rf'^{re.escape(nombre)}_([A-Za-z]+)_(\d+)_close\.jpg$', img_path.name, re.IGNORECASE)
+            m = re.search(rf'^{re.escape(nombre)}_([A-Za-z]+)_(\d+)_close\.jpg$',
+                          img_path.name, re.IGNORECASE)
             if not m:
                 continue
-            color = m.group(1).upper()
+            color      = m.group(1).upper()
             zapato_path = _encontrar_zapato_original(producto_dir, color)
             if not zapato_path:
                 continue
@@ -352,7 +380,7 @@ def _verificar_consistencia_close(imagenes, producto_dir, nombre, output_dir):
                     qa = verificar_imagen(zapato_path, img_bytes)
                     if qa.get("aprobada", False):
                         open(img_path, "wb").write(img_bytes)
-                        print(f"    Regenerada y aprobada")
+                        print("    Regenerada y aprobada")
                         break
                     else:
                         print(f"    Rechazada: {qa.get('motivo_rechazo','')}")
@@ -361,7 +389,7 @@ def _verificar_consistencia_close(imagenes, producto_dir, nombre, output_dir):
     return imagenes
 
 def generar_collage(nombre, output_dir, producto_dir=None):
-    patron = re.compile(rf'^{re.escape(nombre)}_([A-Za-z]+)_\d+_close\.jpg$', re.IGNORECASE)
+    patron   = re.compile(rf'^{re.escape(nombre)}_([A-Za-z]+)_\d+_close\.jpg$', re.IGNORECASE)
     por_color = {}
     for f in sorted(output_dir.iterdir()):
         m = patron.match(f.name)
@@ -380,18 +408,18 @@ def generar_collage(nombre, output_dir, producto_dir=None):
         print("  Verificando consistencia de imagenes _close...")
         imagenes = _verificar_consistencia_close(imagenes, producto_dir, nombre, output_dir)
 
-    cols = 2 if n <= 4 else 3
-    rows = math.ceil(n / cols)
+    cols       = 2 if n <= 4 else 3
+    rows       = math.ceil(n / cols)
     total_cells = rows * cols
-    es_impar = (n % cols != 0)
+    es_impar   = (n % cols != 0)
 
-    cell_w = COLLAGE_TARGET_W
-    cell_h = round(cell_w * COLLAGE_RATIO)
+    cell_w   = COLLAGE_TARGET_W
+    cell_h   = round(cell_w * COLLAGE_RATIO)
     canvas_w = cols * cell_w
     canvas_h = rows * cell_h if es_impar else COLLAGE_HEADER + rows * cell_h
 
     canvas = PIL.Image.new("RGB", (canvas_w, canvas_h), (255, 255, 255))
-    draw = PIL.ImageDraw.Draw(canvas)
+    draw   = PIL.ImageDraw.Draw(canvas)
 
     font = None
     for fp in COLLAGE_FONT_PATHS:
@@ -406,18 +434,16 @@ def generar_collage(nombre, output_dir, producto_dir=None):
     if es_impar:
         y_offset = 0
         for cell_i in range(n, total_cells):
-            col_i = cell_i % cols
-            row_i = cell_i // cols
-            x = col_i * cell_w
-            y = row_i * cell_h
-            draw.rectangle([(x, y), (x + cell_w, y + cell_h)], fill=COLLAGE_HEADER_BG)
+            col_i, row_i = cell_i % cols, cell_i // cols
+            draw.rectangle([(col_i * cell_w, row_i * cell_h),
+                             (col_i * cell_w + cell_w, row_i * cell_h + cell_h)],
+                           fill=COLLAGE_HEADER_BG)
         last_col = (total_cells - 1) % cols
         last_row = (total_cells - 1) // cols
-        cell_x = last_col * cell_w
-        cell_y = last_row * cell_h
         bt = draw.textbbox((0, 0), nombre.upper(), font=font)
         tw, th = bt[2] - bt[0], bt[3] - bt[1]
-        draw.text((cell_x + (cell_w - tw) // 2, cell_y + (cell_h - th) // 2),
+        draw.text((last_col * cell_w + (cell_w - tw) // 2,
+                   last_row * cell_h + (cell_h - th) // 2),
                   nombre.upper(), fill=COLLAGE_GOLD, font=font)
     else:
         y_offset = COLLAGE_HEADER
@@ -428,32 +454,30 @@ def generar_collage(nombre, output_dir, producto_dir=None):
                   nombre.upper(), fill=COLLAGE_GOLD, font=font)
 
     for i, img_path in enumerate(imagenes):
-        row_i = i // cols
-        col_i = i % cols
+        row_i, col_i = i // cols, i % cols
         img = PIL.Image.open(img_path).convert("RGB")
         volteado = _apunta_izquierda(img)
         if volteado:
             img = img.transpose(PIL.Image.FLIP_LEFT_RIGHT)
         img_cell = _fill_cell(img, cell_w, cell_h)
-        x = col_i * cell_w
-        y = y_offset + row_i * cell_h
-        canvas.paste(img_cell, (x, y))
+        canvas.paste(img_cell, (col_i * cell_w, y_offset + row_i * cell_h))
         print(f"  [{col_i},{row_i}] {img_path.name}{' [VOLTEADO]' if volteado else ''}")
 
     output = output_dir / f"{nombre}_collage.jpg"
     canvas.save(output, "JPEG", quality=92)
     print(f"  Collage: {output.name} ({n} colores, {rows}x{cols}, {canvas_w}x{canvas_h}px)")
 
+
+# ── Imágenes web ──────────────────────────────────────────────────────────────
 def _post_procesar_web(img_bytes):
     img = PIL.Image.open(BytesIO(img_bytes)).convert("RGB")
     w, h = img.size
     pixels = img.load()
-    corners = [pixels[0, 0], pixels[w-1, 0], pixels[0, h-1], pixels[w-1, h-1]]
+    corners = [pixels[0,0], pixels[w-1,0], pixels[0,h-1], pixels[w-1,h-1]]
     bg_r = sum(c[0] for c in corners) // 4
     bg_g = sum(c[1] for c in corners) // 4
     bg_b = sum(c[2] for c in corners) // 4
-    bg_img = PIL.Image.new("RGB", (w, h), (bg_r, bg_g, bg_b))
-    diff = PIL.ImageChops.difference(img, bg_img)
+    diff = PIL.ImageChops.difference(img, PIL.Image.new("RGB", (w, h), (bg_r, bg_g, bg_b)))
     dr, dg, db = diff.split()
     max_diff = PIL.ImageChops.lighter(PIL.ImageChops.lighter(dr, dg), db)
     mask = max_diff.point(lambda x: 255 if x > 20 else 0)
@@ -461,13 +485,13 @@ def _post_procesar_web(img_bytes):
     if bbox is None:
         return img_bytes
     cropped = img.crop(bbox)
-    cw, ch = cropped.size
+    cw, ch  = cropped.size
     canvas_size = 1000
-    margin = int(canvas_size * 0.10)
-    max_dim = canvas_size - 2 * margin
-    scale = min(max_dim / cw, max_dim / ch)
+    margin      = int(canvas_size * 0.10)
+    max_dim     = canvas_size - 2 * margin
+    scale       = min(max_dim / cw, max_dim / ch)
     new_w, new_h = round(cw * scale), round(ch * scale)
-    shoe = cropped.resize((new_w, new_h), PIL.Image.LANCZOS)
+    shoe   = cropped.resize((new_w, new_h), PIL.Image.LANCZOS)
     canvas = PIL.Image.new("RGB", (canvas_size, canvas_size), (255, 255, 255))
     canvas.paste(shoe, ((canvas_size - new_w) // 2, (canvas_size - new_h) // 2))
     buf = BytesIO()
@@ -480,7 +504,7 @@ def _generar_variante_web(prompt, zapato_img, archivo_original, output_dir, nomb
         print(f"  [{sufijo}] Ya existe, saltando: {output.name}")
         return
     img_bytes = None
-    aprobada = False
+    aprobada  = False
     for intento in range(1, 4):
         print(f"  [{sufijo}] Intento {intento}/3...")
         try:
@@ -488,9 +512,10 @@ def _generar_variante_web(prompt, zapato_img, archivo_original, output_dir, nomb
             if not img_bytes:
                 continue
             qa = verificar_web(archivo_original, img_bytes)
-            c = qa.get("criterios", {})
+            c  = qa.get("criterios", {})
             aprobada = qa.get("aprobada", False)
-            print(f"  [{sufijo}] Fiel:{c.get('zapato_fiel_al_original')} Fondo:{c.get('fondo_blanco')} Centrado:{c.get('zapato_centrado')}")
+            print(f"  [{sufijo}] Fiel:{c.get('zapato_fiel_al_original')} "
+                  f"Fondo:{c.get('fondo_blanco')} Centrado:{c.get('zapato_centrado')}")
             if aprobada:
                 output = output_dir / f"{nombre_base}{sufijo}.jpg"
                 open(output, "wb").write(_post_procesar_web(img_bytes))
@@ -519,11 +544,13 @@ def generar_web(nombre, producto_dir, output_dir):
         return
     for color, archivo in colores_1:
         print(f"\n  --- Web {color} ---")
-        zapato_img = PIL.Image.open(archivo)
+        zapato_img  = PIL.Image.open(archivo)
         nombre_base = f"{nombre}_{color}"
-        _generar_variante_web(PROMPT_WEB_LATERAL, zapato_img, archivo, output_dir, nombre_base, "_web_lateral")
-        _generar_variante_web(PROMPT_WEB_DIAGONAL, zapato_img, archivo, output_dir, nombre_base, "_web_diagonal")
+        _generar_variante_web(PROMPT_WEB_LATERAL,   zapato_img, archivo, output_dir, nombre_base, "_web_lateral")
+        _generar_variante_web(PROMPT_WEB_DIAGONAL,  zapato_img, archivo, output_dir, nombre_base, "_web_diagonal")
 
+
+# ── Lectura de archivos de producto ───────────────────────────────────────────
 def leer_info_txt(producto_dir):
     info_path = producto_dir / "info.txt"
     if not info_path.exists():
@@ -536,7 +563,7 @@ def leer_info_txt(producto_dir):
     return datos
 
 def leer_procesar_txt(producto_dir):
-    """Lee PROCESAR.txt. Acepta separadores ':' y '=' (formato del bot de Telegram)."""
+    """Acepta separadores '=' (bot Telegram) y ':' (formato legado)."""
     datos = {}
     for linea in open(producto_dir / "PROCESAR.txt", encoding="utf-8", errors="ignore"):
         linea = linea.strip()
@@ -544,10 +571,11 @@ def leer_procesar_txt(producto_dir):
             continue
         if "=" in linea:
             clave, _, valor = linea.partition("=")
-            datos[clave.strip().lower()] = valor.strip()
         elif ":" in linea:
             clave, _, valor = linea.partition(":")
-            datos[clave.strip().lower()] = valor.strip()
+        else:
+            continue
+        datos[clave.strip().lower()] = valor.strip()
     return datos
 
 def actualizar_info_txt(producto_dir, nuevos_datos):
@@ -563,7 +591,7 @@ def _actualizar_precio(producto_dir, precio):
         print(f"  Precio: no hay descripcion donde insertar {precio}")
         return
     lineas = open(salida, encoding="utf-8").readlines()
-    nueva = f"PRECIO: {precio}\n"
+    nueva  = f"PRECIO: {precio}\n"
     for i, l in enumerate(lineas):
         if l.startswith("PRECIO:"):
             lineas[i] = nueva
@@ -576,24 +604,26 @@ def _actualizar_precio(producto_dir, precio):
     open(salida, "w", encoding="utf-8").writelines(lineas)
     print(f"  Precio actualizado en descripcion: {precio}")
 
+
+# ── Descripción Shopify ───────────────────────────────────────────────────────
 def generar_descripcion_shopify(nombre, referencia_path, colores, producto_dir, precio="N/D"):
     salida = producto_dir / "descripcion_shopify.txt"
     if salida.exists():
         print("  Descripcion Shopify: ya existe, saltando")
         return
     print("  Generando descripcion Shopify...")
-    info = leer_info_txt(producto_dir)
-    material          = info.get("material", "Cuero genuino")
-    altura_suela      = info.get("altura_suela", "N/D")
+    info              = leer_info_txt(producto_dir)
+    material          = info.get("material",          "Cuero genuino")
+    altura_suela      = info.get("altura_suela",      "N/D")
     plantilla_confort = info.get("plantilla_confort", "Si")
-    ocasion           = info.get("ocasion", "Casual")
-    tipo_calzado      = info.get("tipo_calzado", "")
-    proveedor         = info.get("proveedor", "DEKO MODA")
+    ocasion           = info.get("ocasion",           "Casual")
+    tipo_calzado      = info.get("tipo_calzado",      "")
+    proveedor         = info.get("proveedor",         "DEKO MODA")
     colores_str       = " / ".join(colores)
     try:
         caract = _leer_caracteristicas(producto_dir)
         if caract:
-            print("  Caracteristicas: desde caracteristicas.txt (sin llamada Vision)")
+            print("  Caracteristicas: desde caracteristicas.txt")
             if not tipo_calzado:
                 tipo_calzado = caract.get("tipo_calzado", "calzado")
             caracteristicas = (
@@ -613,7 +643,7 @@ def generar_descripcion_shopify(nombre, referencia_path, colores, producto_dir, 
                     {"type": "text", "text": PROMPT_VISION_ZAPATO}
                 ]}]
             )
-            vision_txt = vision_resp.content[0].text
+            vision_txt  = vision_resp.content[0].text
             vision_data = json.loads(vision_txt[vision_txt.find("{"):vision_txt.rfind("}")+1])
             if not tipo_calzado:
                 tipo_calzado = vision_data.get("tipo_calzado", "calzado")
@@ -635,16 +665,18 @@ def generar_descripcion_shopify(nombre, referencia_path, colores, producto_dir, 
             f"PRODUCTO: {nombre}", "=" * 60, f"PRECIO: {precio}", "",
             "DESCRIPCION:", descripcion, "",
             "DETALLES TECNICOS:",
-            f"- Material: {material}", f"- Tipo de calzado: {tipo_calzado}",
-            f"- Altura suela: {altura_suela}", f"- Plantilla de confort: {plantilla_confort}",
-            f"- Ocasion: {ocasion}", f"- Proveedor: {proveedor}",
-            f"- Tallas: 35 al 42", f"- Colores: {colores_str}",
+            f"- Material: {material}",          f"- Tipo de calzado: {tipo_calzado}",
+            f"- Altura suela: {altura_suela}",   f"- Plantilla de confort: {plantilla_confort}",
+            f"- Ocasion: {ocasion}",             f"- Proveedor: {proveedor}",
+            f"- Tallas: 35 al 42",               f"- Colores: {colores_str}",
         ]
         open(salida, "w", encoding="utf-8").write("\n".join(lineas))
         print(f"  Descripcion Shopify guardada: {salida.name}")
     except Exception as e:
         print(f"  Error generando descripcion Shopify: {e}")
 
+
+# ── Telegram ──────────────────────────────────────────────────────────────────
 def _telegram_send(texto):
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT:
         return
@@ -663,43 +695,39 @@ def _telegram_ok(nombre, colores, precio_raw, producto_dir, tallas):
         precio_fmt = f"${int(precio_raw):,}".replace(",", ".") if precio_raw.isdigit() else precio_raw
     except Exception:
         precio_fmt = precio_raw
-    ids_path = producto_dir / "shopify_ids.json"
+    ids_path    = producto_dir / "shopify_ids.json"
     url_maestro = "N/D"
-    n_individuales = len(colores)
+    n_ind       = len(colores)
     if ids_path.exists():
         ids = json.loads(ids_path.read_text(encoding="utf-8"))
         mid = ids.get("maestro")
         if mid:
             url_maestro = f"https://{SHOPIFY_SHOP}.myshopify.com/admin/products/{mid}"
-        n_individuales = len(ids.get("individuales", colores))
-    tallas_str = f"{min(tallas)}-{max(tallas)}" if tallas else "N/D"
+        n_ind = len(ids.get("individuales", colores))
+    tallas_str  = f"{min(tallas)}-{max(tallas)}" if tallas else "N/D"
     colores_str = ", ".join(c.upper() for c in colores)
-    texto = (
+    _telegram_send(
         f"DEKO MODA - Producto publicado\n\n"
         f"Estilo: {nombre}\n"
         f"Colores: {colores_str}\n"
         f"Precio: {precio_fmt}\n"
         f"URL: {url_maestro}\n\n"
-        f"Productos individuales creados: {n_individuales}\n"
-        f"Tallas disponibles: {tallas_str}"
+        f"Productos individuales: {n_ind}\n"
+        f"Tallas: {tallas_str}"
     )
-    _telegram_send(texto)
 
 def _telegram_error(nombre, error_msg):
-    texto = (
-        f"DEKO MODA - Error en pipeline\n\n"
-        f"Estilo: {nombre}\n"
-        f"Error: {error_msg}"
-    )
-    _telegram_send(texto)
+    _telegram_send(f"DEKO MODA - Error en pipeline\n\nEstilo: {nombre}\nError: {error_msg}")
 
+
+# ── Shopify ───────────────────────────────────────────────────────────────────
 def _shopify_request(method, endpoint, payload=None):
     if not SHOPIFY_TOKEN:
-        raise RuntimeError("Shopify no configurado (SHOPIFY_TOKEN ausente)")
+        raise RuntimeError("SHOPIFY_TOKEN no configurado")
     url  = f"{SHOPIFY_BASE_URL}/{endpoint}"
     body = json.dumps(payload).encode("utf-8") if payload else None
     req  = urllib.request.Request(url, data=body, method=method, headers={
-        "Content-Type":           "application/json",
+        "Content-Type": "application/json",
         "X-Shopify-Access-Token": SHOPIFY_TOKEN,
     })
     try:
@@ -713,18 +741,18 @@ def _shopify_subir_imagen(product_id, img_path, alt="", variant_ids=None):
     payload = {"image": {"attachment": data, "filename": img_path.name, "alt": alt}}
     if variant_ids:
         payload["image"]["variant_ids"] = variant_ids
-    result = _shopify_request("POST", f"products/{product_id}/images.json", payload)
-    return result["image"]["id"]
+    return _shopify_request("POST", f"products/{product_id}/images.json", payload)["image"]["id"]
 
 def crear_en_shopify(nombre, producto_dir, colores, precio, output_dir):
     ids_path = producto_dir / "shopify_ids.json"
     if ids_path.exists():
-        print("  Shopify: ya publicado (shopify_ids.json existe), saltando")
+        print("  Shopify: ya publicado, saltando")
         return
     desc_raw = open(producto_dir / "descripcion_shopify.txt", encoding="utf-8").read()
-    m = re.search(r'DESCRIPCION HTML:\n(.+?)(?:\n\n|\nCARACTERISTICAS:)', desc_raw, re.DOTALL)
+    m    = re.search(r'DESCRIPCION HTML:\n(.+?)(?:\n\n|\nCARACTERISTICAS:)', desc_raw, re.DOTALL)
     html = m.group(1).strip() if m else ""
-    ids = {"maestro": None, "individuales": {}}
+    ids  = {"maestro": None, "individuales": {}}
+
     print("  Shopify: creando producto maestro...")
     variantes = [
         {"option1": c.capitalize(), "option2": t, "price": precio, "inventory_management": None}
@@ -740,9 +768,11 @@ def crear_en_shopify(nombre, producto_dir, colores, precio, output_dir):
     maestro_id = maestro["id"]
     ids["maestro"] = maestro_id
     print(f"  Shopify: maestro ID {maestro_id} ({len(maestro['variants'])} variantes)")
+
     variantes_por_color = {}
     for v in maestro["variants"]:
         variantes_por_color.setdefault(v["option1"].upper(), []).append(v["id"])
+
     print("  Shopify: creando productos individuales...")
     for color in colores:
         res = _shopify_request("POST", "products.json", {"product": {
@@ -750,33 +780,35 @@ def crear_en_shopify(nombre, producto_dir, colores, precio, output_dir):
             "body_html": html, "status": "draft",
             "tags": f"DEKO MODA, {nombre}, {color.capitalize()}, cuero",
             "options": [{"name": "Talla"}],
-            "variants": [
-                {"option1": t, "price": precio, "inventory_management": None}
-                for t in SHOPIFY_TALLAS
-            ],
+            "variants": [{"option1": t, "price": precio, "inventory_management": None}
+                         for t in SHOPIFY_TALLAS],
         }})
         pid = res["product"]["id"]
         ids["individuales"][color] = pid
         print(f"    [{color}] ID {pid}")
+
     print("  Shopify: subiendo imagenes...")
     for color in colores:
         img = output_dir / f"{nombre}_{color}_web_lateral_pp.jpg"
         if not img.exists():
             print(f"    [{color}] imagen no encontrada, saltando")
             continue
-        alt = f"{nombre} {color.capitalize()}"
+        alt_txt = f"{nombre} {color.capitalize()}"
         try:
             ind_id = ids["individuales"].get(color)
             if ind_id:
-                _shopify_subir_imagen(ind_id, img, alt=alt)
+                _shopify_subir_imagen(ind_id, img, alt=alt_txt)
             vids = variantes_por_color.get(color, [])
-            _shopify_subir_imagen(maestro_id, img, alt=alt, variant_ids=vids)
+            _shopify_subir_imagen(maestro_id, img, alt=alt_txt, variant_ids=vids)
             print(f"    [{color}] imagenes subidas")
         except RuntimeError as e:
             print(f"    [{color}] ERROR imagen: {e}")
-    ids_path.write_text(json.dumps(ids, indent=2), encoding="utf-8")
-    print(f"  Shopify: IDs guardados en shopify_ids.json")
 
+    ids_path.write_text(json.dumps(ids, indent=2), encoding="utf-8")
+    print(f"  Shopify: IDs guardados — maestro {maestro_id}")
+
+
+# ── Procesamiento principal ───────────────────────────────────────────────────
 def procesar_producto(producto_dir):
     nombre = producto_dir.name
     print("=" * 70)
@@ -792,7 +824,7 @@ def procesar_producto(producto_dir):
         actualizar_info_txt(producto_dir, campos_info)
         print(f"  info.txt actualizado: {list(campos_info.keys())}")
 
-    # Busca referencia (incluye referencia_pinterest.jpg del bot de Telegram)
+    # Referencia: acepta referencia_pinterest.jpg (generada por el bot)
     referencia = None
     for nombre_ref in ["referencia.jpg", "referencia.jpeg", "referencia.png",
                        "referencia_pinterest.jpg", "referencia_pinterest.png"]:
@@ -800,7 +832,7 @@ def procesar_producto(producto_dir):
             referencia = producto_dir / nombre_ref
             break
     if not referencia:
-        print("ERROR: No se encontro referencia.jpg/png")
+        print("ERROR: No se encontro referencia")
         (producto_dir / "PROCESAR.txt").unlink(missing_ok=True)
         return
 
@@ -830,27 +862,25 @@ def procesar_producto(producto_dir):
     if hay_faltantes:
         prompt_path       = producto_dir / "prompt_nanobanana.txt"
         prompt_close_path = producto_dir / "prompt_nanobanana_close.txt"
-        if prompt_path.exists():
-            prompt = open(prompt_path, encoding="utf-8").read()
-            print("  Prompt cuerpo completo: reutilizando")
-        else:
-            prompt = analizar_referencia(referencia)
+        prompt = open(prompt_path, encoding="utf-8").read() if prompt_path.exists() else analizar_referencia(referencia)
+        if not prompt_path.exists():
             open(prompt_path, "w", encoding="utf-8").write(prompt)
             print("  Prompt cuerpo completo: generado")
-        if prompt_close_path.exists():
-            prompt_close = open(prompt_close_path, encoding="utf-8").read()
-            print("  Prompt plano cerrado: reutilizando")
         else:
-            prompt_close = analizar_referencia_close(referencia)
+            print("  Prompt cuerpo completo: reutilizando")
+        prompt_close = open(prompt_close_path, encoding="utf-8").read() if prompt_close_path.exists() else analizar_referencia_close(referencia)
+        if not prompt_close_path.exists():
             open(prompt_close_path, "w", encoding="utf-8").write(prompt_close)
             print("  Prompt plano cerrado: generado")
+        else:
+            print("  Prompt plano cerrado: reutilizando")
 
         print(f"\n  Generando: {[f'{c}_{n}' for c,n,_ in faltantes]}")
         for color, numero, archivo in faltantes:
             print(f"\n  --- {color}_{numero} ---")
-            zapato_img = PIL.Image.open(archivo)
+            zapato_img  = PIL.Image.open(archivo)
             nombre_base = f"{nombre}_{color}_{numero}"
-            _generar_variante(prompt, zapato_img, archivo, output_dir, nombre_base, sufijo="")
+            _generar_variante(prompt,       zapato_img, archivo, output_dir, nombre_base, sufijo="")
             _generar_variante(prompt_close, zapato_img, archivo, output_dir, nombre_base, sufijo="_close")
 
         print("\n  Regenerando collage...")
@@ -882,8 +912,7 @@ def procesar_producto(producto_dir):
         _actualizar_precio(producto_dir, procesar_data["precio"])
 
     desc_ok = (producto_dir / "descripcion_shopify.txt").exists()
-    web_ok  = any((output_dir / f"{nombre}_{c}_web_lateral_pp.jpg").exists()
-                  for c in colores_todos)
+    web_ok  = any((output_dir / f"{nombre}_{c}_web_lateral_pp.jpg").exists() for c in colores_todos)
     precio_shopify = procesar_data.get("precio", "0")
     if desc_ok and web_ok and SHOPIFY_TOKEN:
         try:
@@ -897,11 +926,12 @@ def procesar_producto(producto_dir):
     _telegram_ok(nombre, colores_todos, precio_shopify, producto_dir, SHOPIFY_TALLAS)
 
 
+# ── Entrypoint ────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     if len(sys.argv) > 1:
-        # Llamado desde bot.py con nombre de producto: python pipeline.py NOMBRE
-        nombre_arg = sys.argv[1]
-        producto_dir = PRODUCTOS_DIR / nombre_arg
+        # Modo bot: python pipeline.py NOMBRE_ESTILO
+        nombre_arg    = sys.argv[1]
+        producto_dir  = PRODUCTOS_DIR / nombre_arg
         if not producto_dir.exists():
             print(f"ERROR: carpeta no encontrada: {producto_dir}")
             sys.exit(1)
@@ -913,7 +943,9 @@ if __name__ == "__main__":
         # Modo monitor: escanea continuamente
         print("=" * 70)
         print("DEKO MODA - Monitor de productos")
-        print("Esperando PROCESAR.txt... Ctrl+C para detener")
+        print(f"Entorno: {'Railway' if EN_RAILWAY else 'Local'}")
+        print(f"Productos: {PRODUCTOS_DIR}")
+        print("Ctrl+C para detener")
         print("=" * 70)
         while True:
             for carpeta in PRODUCTOS_DIR.iterdir():
