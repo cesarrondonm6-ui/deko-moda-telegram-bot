@@ -163,20 +163,20 @@ def _construir_resumen(ud: dict) -> str:
     colores = ud["colores"]
 
     lineas = [
-        "*── RESUMEN DEL ESTILO ──*",
-        f"Nombre: *{nombre}*",
+        "── RESUMEN DEL ESTILO ──",
+        f"Nombre: {nombre}",
         f"Colores: {', '.join(colores)}",
         "",
-        "*Datos del producto:*",
+        "Datos del producto:",
     ]
     for k, v in datos.items():
-        lineas.append(f"  • {k}: {v}")
+        lineas.append(f"  {k}: {v}")
     lineas += [
         "",
         f"Fotos de color: {len(colores)}",
         "Foto referencia Pinterest: 1",
         "",
-        "Confirmas el registro? Responde *SI* o *NO*.",
+        "Confirmas el registro? Responde SI o NO.",
     ]
     return "\n".join(lineas)
 
@@ -342,7 +342,7 @@ async def recibir_foto_referencia(update: Update, context: ContextTypes.DEFAULT_
 
     resumen = _construir_resumen(context.user_data)
     keyboard = ReplyKeyboardMarkup([["SI", "NO"]], one_time_keyboard=True, resize_keyboard=True)
-    await update.message.reply_text(resumen, parse_mode="Markdown", reply_markup=keyboard)
+    await update.message.reply_text(resumen, reply_markup=keyboard)
     return CONFIRMACION
 
 
