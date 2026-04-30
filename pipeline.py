@@ -24,11 +24,12 @@ EN_RAILWAY = os.getenv("RAILWAY_ENVIRONMENT") is not None
 if EN_RAILWAY:
     BASE_DIR      = "/app/data"
     GEMINI_KEY    = os.getenv("GEMINI_KEY", "")
-    ANTHROPIC_KEY = os.getenv("ANTHROPIC_KEY", "")
+    # Acepta ANTHROPIC_KEY o ANTHROPIC_API_KEY (mismo token, distintos nombres)
+    ANTHROPIC_KEY = os.getenv("ANTHROPIC_KEY") or os.getenv("ANTHROPIC_API_KEY", "")
     SHOPIFY_TOKEN = os.getenv("SHOPIFY_TOKEN", "")
     SHOPIFY_SHOP  = os.getenv("SHOPIFY_SHOP", "")
-    TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
-    TELEGRAM_CHAT  = os.getenv("TELEGRAM_CHAT", "")
+    TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN") or os.getenv("BOT_TOKEN", "")
+    TELEGRAM_CHAT  = os.getenv("TELEGRAM_CHAT") or os.getenv("CHAT_ID", "")
 else:
     BASE_DIR = "C:/Deko_Automatizacion"
     _creds_path = Path(BASE_DIR) / "credentials.json"

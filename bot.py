@@ -111,14 +111,11 @@ Estructura de respuesta:
 
 Reglas de validación:
 - precio: número positivo (sin símbolo de moneda)
-- tallas: acepta DOS formatos, ambos son VÁLIDOS:
-    Formato 1 - Rango con guión: "35-40" significa tallas del 35 al 40 inclusive
-    Formato 2 - Lista con comas: "35,36,37,38" lista específica de tallas
-    IMPORTANTE: NO rechaces el formato con guión. "35-40" es completamente válido.
 - altura_suela: incluye unidad cm o mm (ej: 3cm)
 - plantilla_confort y cordon: si | no
 - ocasion: casual | formal | deportivo | elegante | trabajo
 - todos los campos son obligatorios y no vacíos
+- NO valides el campo tallas: ya fue validado antes de llamarte
 
 Datos a validar:
 {datos_str}"""
@@ -242,6 +239,18 @@ async def recibir_datos(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
             "Faltan los siguientes campos:\n"
             + "\n".join(f"  • {c}" for c in faltantes)
             + "\n\nReenvía el bloque completo."
+        )
+        return DATOS
+
+    # Validación local de tallas (Python) — no delegada a Claude
+    tallas_val = datos.get("tallas", "")
+    if not re.match(r'^\d{2}-\d{2}$|^\d{2}(\s*,\s*\d{2})+$|^\d{2}$', tallas_val):
+        await update.message.reply_text(
+            f"El campo 'tallas' tiene formato invalido: '{tallas_val}'\n\n"
+            "Formatos aceptados:\n"
+            "  Rango:  35-40\n"
+            "  Lista:  35,36,37,38,39,40\n\n"
+            "Corrige y reenvía los datos."
         )
         return DATOS
 
