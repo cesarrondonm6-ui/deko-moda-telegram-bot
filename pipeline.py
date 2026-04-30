@@ -68,6 +68,13 @@ COLLAGE_FONT_PATHS = (
 gemini_client = genai.Client(api_key=GEMINI_KEY) if GEMINI_KEY else None
 claude_client = anthropic.Anthropic(api_key=ANTHROPIC_KEY) if ANTHROPIC_KEY else None
 
+if not GEMINI_KEY:
+    print("ERROR: GEMINI_KEY no configurado — no se generaran imagenes")
+if not ANTHROPIC_KEY:
+    print("ERROR: ANTHROPIC_KEY / ANTHROPIC_API_KEY no configurado — no se generaran descripciones ni analisis")
+if not SHOPIFY_TOKEN:
+    print("AVISO: SHOPIFY_TOKEN no configurado — no se publicara en Shopify")
+
 # ── Constantes ────────────────────────────────────────────────────────────────
 SHOPIFY_TALLAS = [str(t) for t in range(35, 43)]
 INFO_FIELDS    = {"material", "altura_suela", "plantilla_confort", "ocasion", "tipo_calzado", "proveedor"}
@@ -207,6 +214,8 @@ def analizar_referencia_close(referencia_path):
 
 # ── Generación de imágenes ────────────────────────────────────────────────────
 def generar_imagen(prompt, zapato_img):
+    if gemini_client is None:
+        raise RuntimeError("GEMINI_KEY no configurado")
     response = gemini_client.models.generate_content(
         model="gemini-3-pro-image-preview", contents=[prompt, zapato_img])
     for part in response.candidates[0].content.parts:

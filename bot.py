@@ -364,32 +364,51 @@ async def _enviar_imagenes_generadas(
 ) -> None:
     """Envía al chat el collage y las imágenes web_lateral generadas."""
     output_dir = carpeta / "imagenes_generadas"
+    chat_id = update.effective_chat.id
+
     if not output_dir.exists():
+        await context.bot.send_message(chat_id=chat_id,
+            text="Sin imagenes generadas: la carpeta imagenes_generadas no existe.")
         return
 
-    chat_id = update.effective_chat.id
+    archivos = [f for f in output_dir.iterdir() if f.suffix.lower() in (".jpg", ".png")]
+    if not archivos:
+        await context.bot.send_message(chat_id=chat_id,
+            text="Sin imagenes generadas. Verifica que GEMINI_KEY este configurado en Railway.")
+        return
+
+    enviadas = 0
 
     # 1. Collage
     collage = output_dir / f"{nombre}_collage.jpg"
     if collage.exists():
         with open(collage, "rb") as f:
             await context.bot.send_photo(chat_id=chat_id, photo=f, caption=f"Collage {nombre}")
+        enviadas += 1
 
     # 2. Web lateral por color
     for color in colores:
         web = output_dir / f"{nombre}_{color}_web_lateral.jpg"
         if web.exists():
             with open(web, "rb") as f:
-                await context.bot.send_photo(chat_id=chat_id, photo=f, caption=f"{nombre} - {color} (web lateral)")
+                await context.bot.send_photo(chat_id=chat_id, photo=f,
+                    caption=f"{nombre} - {color} (web lateral)")
+            enviadas += 1
 
-    # 3. Fotos de escena (cuerpo completo) por color
+    # 3. Escena y close por color
     for color in colores:
-        for sufijo in ["", "_close"]:
+        for sufijo, label in [("", "escena"), ("_close", "close")]:
             escena = output_dir / f"{nombre}_{color}_1{sufijo}.jpg"
             if escena.exists():
-                label = "close" if sufijo else "escena"
                 with open(escena, "rb") as f:
-                    await context.bot.send_photo(chat_id=chat_id, photo=f, caption=f"{nombre} - {color} ({label})")
+                    await context.bot.send_photo(chat_id=chat_id, photo=f,
+                        caption=f"{nombre} - {color} ({label})")
+                enviadas += 1
+
+    if enviadas == 0:
+        nombres = ", ".join(f.name for f in archivos[:10])
+        await context.bot.send_message(chat_id=chat_id,
+            text=f"Archivos en carpeta pero no coinciden con el patron esperado:\n{nombres}")
 
 
 async def confirmar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
