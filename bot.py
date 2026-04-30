@@ -34,8 +34,19 @@ ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 CHAT_ID = os.getenv("CHAT_ID")
 SHOPIFY_TOKEN = os.getenv("SHOPIFY_TOKEN")
 
-if not all([BOT_TOKEN, ANTHROPIC_API_KEY, CHAT_ID, SHOPIFY_TOKEN]):
-    raise ValueError("Faltan variables de entorno: BOT_TOKEN, ANTHROPIC_API_KEY, CHAT_ID, SHOPIFY_TOKEN")
+# Validación con logs para debugging
+if not BOT_TOKEN:
+    print("BOT_TOKEN vacio")
+if not ANTHROPIC_API_KEY:
+    print("ANTHROPIC_API_KEY vacio")
+if not CHAT_ID:
+    print("CHAT_ID vacio")
+if not SHOPIFY_TOKEN:
+    print("SHOPIFY_TOKEN vacio")
+
+# Si al menos BOT_TOKEN y ANTHROPIC_API_KEY existen, continúa
+if not (BOT_TOKEN and ANTHROPIC_API_KEY):
+    raise ValueError("Faltan BOT_TOKEN o ANTHROPIC_API_KEY")
 
 # ── Estados de la conversación ─────────────────────────────────────────────────
 (
