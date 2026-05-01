@@ -7,6 +7,7 @@ import math
 import base64
 import urllib.request
 import urllib.error
+import requests
 from io import BytesIO
 from pathlib import Path
 
@@ -74,6 +75,8 @@ if not ANTHROPIC_KEY:
     print("ERROR: ANTHROPIC_KEY / ANTHROPIC_API_KEY no configurado — no se generaran descripciones ni analisis")
 if not SHOPIFY_TOKEN:
     print("AVISO: SHOPIFY_TOKEN no configurado — no se publicara en Shopify")
+
+_gemini_calls = 0  # contador de llamadas a Gemini por producto
 
 # ── Constantes ────────────────────────────────────────────────────────────────
 SHOPIFY_TALLAS = [str(t) for t in range(35, 43)]
@@ -214,10 +217,12 @@ def analizar_referencia_close(referencia_path):
 
 # ── Generación de imágenes ────────────────────────────────────────────────────
 def generar_imagen(prompt, zapato_img):
+    global _gemini_calls
     if gemini_client is None:
         raise RuntimeError("GEMINI_KEY no configurado")
     response = gemini_client.models.generate_content(
         model="gemini-2.5-flash-image", contents=[prompt, zapato_img])
+    _gemini_calls += 1
     for part in response.candidates[0].content.parts:
         if hasattr(part, "inline_data") and part.inline_data:
             img_bytes = part.inline_data.data
@@ -729,6 +734,60 @@ def _telegram_ok(nombre, colores, precio_raw, producto_dir, tallas):
 def _telegram_error(nombre, error_msg):
     _telegram_send(f"DEKO MODA - Error en pipeline\n\nEstilo: {nombre}\nError: {error_msg}")
 
+def enviar_imagen_telegram(image_path, caption):
+    if not TELEGRAM_TOKEN or not TELEGRAM_CHAT:
+        print("  Telegram: TOKEN o CHAT no configurado, saltando envio de imagen")
+        return
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendPhoto"
+    try:
+        with open(image_path, "rb") as f:
+            r = requests.post(url,
+                data={"chat_id": TELEGRAM_CHAT, "caption": caption},
+                files={"photo": f})
+        if r.status_code != 200:
+            print(f"  Telegram foto: error {r.status_code} — {r.text[:200]}")
+    except Exception as e:
+        print(f"  Telegram foto: {e}")
+
+def esperar_respuesta_telegram(timeout=1800):
+    if not TELEGRAM_TOKEN or not TELEGRAM_CHAT:
+        print("  Telegram: no configurado — continuando automaticamente (SI)")
+        return "SI"
+    url_updates = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates"
+    offset = None
+    try:
+        req = urllib.request.Request(f"{url_updates}?limit=1&offset=-1")
+        with urllib.request.urlopen(req, timeout=10) as r:
+            data = json.loads(r.read())
+            if data.get("result"):
+                offset = data["result"][-1]["update_id"] + 1
+    except Exception:
+        pass
+    deadline = time.time() + timeout
+    print(f"  Esperando SI/NO en Telegram (timeout {timeout // 60} min)...")
+    while time.time() < deadline:
+        time.sleep(10)
+        try:
+            params = f"?timeout=9{('&offset=' + str(offset)) if offset else ''}"
+            req = urllib.request.Request(url_updates + params)
+            with urllib.request.urlopen(req, timeout=15) as r:
+                data = json.loads(r.read())
+            for update in data.get("result", []):
+                offset = update["update_id"] + 1
+                msg = update.get("message", {})
+                if str(msg.get("chat", {}).get("id", "")) == str(TELEGRAM_CHAT):
+                    text = msg.get("text", "").strip().upper()
+                    if text in ("SI", "SÍ", "S", "YES"):
+                        print("  Respuesta recibida: SI — continuando")
+                        return "SI"
+                    elif text == "NO":
+                        print("  Respuesta recibida: NO — deteniendo")
+                        return "NO"
+        except Exception as e:
+            print(f"  Telegram polling error: {e}")
+    print("  Timeout sin respuesta — deteniendo")
+    return "TIMEOUT"
+
 
 # ── Shopify ───────────────────────────────────────────────────────────────────
 def _shopify_request(method, endpoint, payload=None):
@@ -821,6 +880,8 @@ def crear_en_shopify(nombre, producto_dir, colores, precio, output_dir):
 # ── Procesamiento principal ───────────────────────────────────────────────────
 def procesar_producto(producto_dir):
     nombre = producto_dir.name
+    global _gemini_calls
+    _gemini_calls = 0
     print("=" * 70)
     print(f"PROCESANDO: {nombre}")
     print("=" * 70)
@@ -898,14 +959,32 @@ def procesar_producto(producto_dir):
         if collage_path.exists():
             collage_path.unlink()
         generar_collage(nombre, output_dir, producto_dir)
-        generar_web(nombre, producto_dir, output_dir)
 
-        if descripcion_existe:
-            print("  Regenerando descripcion (nuevos colores)...")
-            (producto_dir / "descripcion_shopify.txt").unlink()
-        if info_completa or campos_info:
-            generar_descripcion_shopify(nombre, referencia, colores_todos, producto_dir,
-                                        precio=procesar_data.get("precio", "N/D"))
+        # Enviar collage y esperar autorización Telegram
+        if collage_path.exists():
+            enviar_imagen_telegram(collage_path, caption=(
+                f"Imagenes generadas — {nombre}\n\n"
+                f"Llamadas a Gemini: {_gemini_calls}\n"
+                f"Imagenes generadas: {_gemini_calls}\n\n"
+                "Continuar con fondo blanco + Shopify?\n"
+                "Responde SI para continuar o NO para detener."
+            ))
+        respuesta = esperar_respuesta_telegram(timeout=1800)
+
+        if respuesta == "SI":
+            # DESACTIVADO TEMPORALMENTE — requiere autorización Telegram
+            generar_web(nombre, producto_dir, output_dir)
+
+            if descripcion_existe:
+                print("  Regenerando descripcion (nuevos colores)...")
+                (producto_dir / "descripcion_shopify.txt").unlink()
+            if info_completa or campos_info:
+                generar_descripcion_shopify(nombre, referencia, colores_todos, producto_dir,
+                                            precio=procesar_data.get("precio", "N/D"))
+        else:
+            _telegram_send(f"Proceso detenido para {nombre}")
+            (producto_dir / "PROCESAR.txt").unlink(missing_ok=True)
+            return
 
     elif campos_info and descripcion_existe:
         print("  Regenerando descripcion (info actualizada)...")
@@ -921,15 +1000,17 @@ def procesar_producto(producto_dir):
     if tiene_precio:
         _actualizar_precio(producto_dir, procesar_data["precio"])
 
-    desc_ok = (producto_dir / "descripcion_shopify.txt").exists()
-    web_ok  = any((output_dir / f"{nombre}_{c}_web_lateral.jpg").exists() for c in colores_todos)
     precio_shopify = procesar_data.get("precio", "0")
-    if desc_ok and web_ok and SHOPIFY_TOKEN:
-        try:
-            crear_en_shopify(nombre, producto_dir, colores_todos, precio_shopify, output_dir)
-        except RuntimeError as e:
-            print(f"  Shopify ERROR: {e}")
-            _telegram_error(nombre, f"Shopify: {e}")
+
+    # DESACTIVADO TEMPORALMENTE — requiere autorización Telegram
+    # desc_ok = (producto_dir / "descripcion_shopify.txt").exists()
+    # web_ok  = any((output_dir / f"{nombre}_{c}_web_lateral.jpg").exists() for c in colores_todos)
+    # if desc_ok and web_ok and SHOPIFY_TOKEN:
+    #     try:
+    #         crear_en_shopify(nombre, producto_dir, colores_todos, precio_shopify, output_dir)
+    #     except RuntimeError as e:
+    #         print(f"  Shopify ERROR: {e}")
+    #         _telegram_error(nombre, f"Shopify: {e}")
 
     (producto_dir / "PROCESAR.txt").unlink(missing_ok=True)
     print(f"\n{nombre} completado!")
