@@ -744,7 +744,7 @@ def enviar_imagen_telegram(image_path, caption, parse_mode=None):
             data = {"chat_id": TELEGRAM_CHAT, "caption": caption}
             if parse_mode:
                 data["parse_mode"] = parse_mode
-            r = requests.post(url, data=data, files={"photo": f})
+            r = requests.post(url, data=data, files={"photo": f}, timeout=60)
         if r.ok:
             print(f"  Telegram foto: enviada OK")
         else:
@@ -775,7 +775,7 @@ def _telegram_send_album(imagenes, caption):
         media.append(item)
         files[key] = open(img_path, "rb")
     try:
-        r = requests.post(url, data={"chat_id": TELEGRAM_CHAT, "media": json.dumps(media)}, files=files)
+        r = requests.post(url, data={"chat_id": TELEGRAM_CHAT, "media": json.dumps(media)}, files=files, timeout=60)
         if r.ok:
             print(f"  Telegram álbum: enviado OK ({len(imagenes)} fotos)")
         else:
