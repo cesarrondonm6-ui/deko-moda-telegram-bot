@@ -314,6 +314,7 @@ def _generar_variante(prompt, zapato_img, archivo_original, output_dir, nombre_b
                 break
             else:
                 print(f"  [QA] RECHAZADA {sufijo}: {qa}")
+                _telegram_send(f"⚠️ QA rechazó imagen {sufijo}:\n{qa.get('motivo_rechazo', 'Sin motivo')}")
         except Exception as e:
             print(f"  [{sufijo}] Error: {e}")
     if not aprobada and img_bytes:
