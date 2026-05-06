@@ -129,7 +129,7 @@ IMAGEN 2: Imagen generada
 Responde SOLO JSON sin markdown:
 {
   "aprobada": true,
-  "criterios": {"zapato_visible": true, "plano_cerrado": true, "ambos_zapatos_visibles": true, "zapato_fiel_al_original": true},
+  "criterios": {"zapato_visible": true, "plano_cerrado": true, "zapato_fiel_al_original": true},
   "motivo_rechazo": "",
   "zapato_original": {
     "tipo_calzado": "bota / botin / sandalia / baleta / mocasin / taco / plataforma / deportivo / otro",
@@ -1143,6 +1143,7 @@ def procesar_producto(producto_dir):
             prompt_close = analizar_referencia_close(referencia)
             open(prompt_close_path, "w", encoding="utf-8").write(prompt_close)
             print("  Prompt plano cerrado: generado")
+            _telegram_send(f"📋 Prompt _close generado para {nombre}:\n\n{prompt_close}")
 
         print(f"\n  Generando: {[f'{c}_{n}' for c,n,_ in faltantes]}")
         for color, numero, archivo in faltantes:
