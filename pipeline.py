@@ -745,7 +745,9 @@ def enviar_imagen_telegram(image_path, caption, parse_mode=None):
             if parse_mode:
                 data["parse_mode"] = parse_mode
             r = requests.post(url, data=data, files={"photo": f})
-        if r.status_code != 200:
+        if r.ok:
+            print(f"  Telegram foto: enviada OK")
+        else:
             print(f"  Telegram foto: error {r.status_code} — {r.text[:200]}")
     except Exception as e:
         print(f"  Telegram foto: {e}")
@@ -756,7 +758,11 @@ def _telegram_send_album(imagenes, caption):
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT:
         print("  Telegram álbum: no configurado, saltando")
         return
+    print(f"  Telegram álbum: {len(imagenes)} imágenes encontradas")
     if not imagenes:
+        if caption:
+            print("  Telegram álbum: sin fotos, enviando caption como texto")
+            _telegram_send(caption)
         return
     url   = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMediaGroup"
     media = []
@@ -770,10 +776,16 @@ def _telegram_send_album(imagenes, caption):
         files[key] = open(img_path, "rb")
     try:
         r = requests.post(url, data={"chat_id": TELEGRAM_CHAT, "media": json.dumps(media)}, files=files)
-        if r.status_code != 200:
-            print(f"  Telegram álbum: error {r.status_code} — {r.text[:200]}")
+        if r.ok:
+            print(f"  Telegram álbum: enviado OK ({len(imagenes)} fotos)")
+        else:
+            print(f"  Telegram álbum: error {r.status_code} — {r.text[:300]}")
+            if caption:
+                _telegram_send(caption)
     except Exception as e:
         print(f"  Telegram álbum: {e}")
+        if caption:
+            _telegram_send(caption)
     finally:
         for f in files.values():
             f.close()
@@ -897,41 +909,48 @@ def _enviar_notificacion_telegram(nombre, producto_dir, precio_raw, colores_todo
         else:
             print("  Shopify Files: URL no disponible")
 
-    # MENSAJE 1: álbum con todas las _close + URL Shopify
-    patron_close   = re.compile(rf'^{re.escape(nombre)}_([A-Za-z][A-Za-z0-9_]*)_\d+_close\.jpg$', re.IGNORECASE)
-    imagenes_close = sorted(p for p in output_dir.iterdir() if patron_close.match(p.name))
-    lineas_album   = [
-        f"✅ {nombre} — Imágenes generadas",
-        f"📸 Imágenes creadas: {_gemini_calls}",
-        f"🤖 Llamadas Gemini: {_gemini_calls}",
-    ]
-    if url_collage:
-        lineas_album.append(f"🔗 Collage en Shopify:\n{url_collage}")
-    _telegram_send_album(imagenes_close, "\n".join(lineas_album))
-
-    # MENSAJE 2: collage con datos del producto
-    info_not     = leer_info_txt(producto_dir)
-    material     = info_not.get("material", "")
-    material_fmt = f"{material} 🐮" if "cuero" in material.lower() else material
     try:
-        precio_fmt = f"${int(precio_raw):,}".replace(",", ".") if str(precio_raw).isdigit() else precio_raw
-    except Exception:
-        precio_fmt = precio_raw
-    colores_str    = " | ".join(c.replace("_", " ").title() for c in sorted(colores_todos))
-    lineas_caption = [f"*Ref. {nombre.title()}*"]
-    if material_fmt:
-        lineas_caption.append(f"Material: *{material_fmt}*")
-    lineas_caption.append(colores_str)
-    lineas_caption.append("")
-    if precio_fmt:
-        lineas_caption.append(f"*{precio_fmt} 🚚 Envío gratis*")
-    lineas_caption.append("Pedidos 📲 300 319 1553")
-    caption_collage = "\n".join(lineas_caption)
+        # MENSAJE 1: álbum con todas las _close + URL Shopify
+        patron_close   = re.compile(rf'^{re.escape(nombre)}_([A-Za-z][A-Za-z0-9_]*)_\d+_close\.jpg$', re.IGNORECASE)
+        imagenes_close = sorted(p for p in output_dir.iterdir() if patron_close.match(p.name))
+        print(f"  Imágenes _close encontradas: {len(imagenes_close)}")
+        lineas_album   = [
+            f"✅ {nombre} — Imágenes generadas",
+            f"📸 Imágenes creadas: {_gemini_calls}",
+            f"🤖 Llamadas Gemini: {_gemini_calls}",
+        ]
+        if url_collage:
+            lineas_album.append(f"🔗 Collage en Shopify:\n{url_collage}")
+        _telegram_send_album(imagenes_close, "\n".join(lineas_album))
 
-    if collage_path.exists():
-        enviar_imagen_telegram(collage_path, caption=caption_collage, parse_mode="Markdown")
-    else:
-        _telegram_send(caption_collage)
+        # MENSAJE 2: collage con datos del producto
+        info_not     = leer_info_txt(producto_dir)
+        material     = info_not.get("material", "")
+        material_fmt = f"{material} 🐮" if "cuero" in material.lower() else material
+        try:
+            precio_fmt = f"${int(precio_raw):,}".replace(",", ".") if str(precio_raw).isdigit() else precio_raw
+        except Exception:
+            precio_fmt = precio_raw
+        colores_str    = " | ".join(c.replace("_", " ").title() for c in sorted(colores_todos))
+        lineas_caption = [f"*Ref. {nombre.title()}*"]
+        if material_fmt:
+            lineas_caption.append(f"Material: *{material_fmt}*")
+        lineas_caption.append(colores_str)
+        lineas_caption.append("")
+        if precio_fmt:
+            lineas_caption.append(f"*{precio_fmt} 🚚 Envío gratis*")
+        lineas_caption.append("Pedidos 📲 300 319 1553")
+        caption_collage = "\n".join(lineas_caption)
+
+        print("  Enviando MENSAJE 2 (collage)...")
+        if collage_path.exists():
+            enviar_imagen_telegram(collage_path, caption=caption_collage, parse_mode="Markdown")
+        else:
+            print("  Collage no encontrado, enviando como texto")
+            _telegram_send(caption_collage)
+    except Exception as e:
+        print(f"  Error en notificacion Telegram: {e}")
+        import traceback; traceback.print_exc()
 
 def esperar_respuesta_telegram(timeout=1800):
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT:
