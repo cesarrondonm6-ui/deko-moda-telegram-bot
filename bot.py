@@ -4,6 +4,8 @@ import sys
 import json
 import logging
 import subprocess
+import threading
+import urllib.request
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -76,6 +78,18 @@ CAMPOS_REQUERIDOS = [
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
+
+def _telegram_send(token: str, chat_id: str, text: str) -> None:
+    """Envía un mensaje de texto vía Bot API (síncrono, seguro para usar en threads)."""
+    url  = f"https://api.telegram.org/bot{token}/sendMessage"
+    body = json.dumps({"chat_id": chat_id, "text": text}).encode("utf-8")
+    req  = urllib.request.Request(url, data=body, method="POST",
+                                  headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=10) as r:
+            r.read()
+    except Exception as e:
+        logger.error("_telegram_send error: %s", e)
 
 def _parse_datos(texto: str) -> tuple[dict, list]:
     """
@@ -401,6 +415,27 @@ async def _enviar_imagenes_generadas(
             text=f"Archivos en carpeta pero no coinciden con el patron esperado:\n{nombres}")
 
 
+def _run_pipeline(nombre: str, carpeta: str, chat_id: str, token: str) -> None:
+    """Ejecuta el pipeline en un thread background y notifica el resultado por Telegram."""
+    try:
+        proc = subprocess.run(
+            [sys.executable, str(PIPELINE_SCRIPT), nombre],
+            capture_output=True,
+            text=True,
+            timeout=1800,
+        )
+        if proc.stdout:
+            logger.info("Pipeline stdout [%s]:\n%s", nombre, proc.stdout[:2000])
+        if proc.stderr:
+            logger.error("Pipeline stderr [%s]:\n%s", nombre, proc.stderr[:2000])
+        if proc.returncode != 0:
+            _telegram_send(token, chat_id,
+                f"❌ Error en pipeline {nombre}:\n{proc.stderr[-500:]}")
+    except subprocess.TimeoutExpired:
+        _telegram_send(token, chat_id,
+            f"⚠️ Pipeline {nombre} excedió 30 minutos. Revisar manualmente.")
+
+
 async def confirmar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     respuesta = update.message.text.strip().upper()
 
@@ -439,38 +474,20 @@ async def confirmar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         ref_file = await context.bot.get_file(foto_ref_id)
         await ref_file.download_to_drive(str(carpeta / "referencia_pinterest.jpg"))
 
-        # 4. Disparar pipeline
-        proc = subprocess.run(
-            [sys.executable, str(PIPELINE_SCRIPT), nombre],
-            capture_output=True,
-            text=True,
-            timeout=300,
+        # 4. Disparar pipeline en background
+        t = threading.Thread(
+            target=_run_pipeline,
+            args=(nombre, str(carpeta), CHAT_ID, BOT_TOKEN),
+            daemon=True,
         )
+        t.start()
 
-        # Volcar salida del pipeline a los logs de Railway
-        if proc.stdout:
-            logger.info("Pipeline stdout [%s]:\n%s", nombre, proc.stdout[:2000])
-        if proc.stderr:
-            logger.error("Pipeline stderr [%s]:\n%s", nombre, proc.stderr[:2000])
-
-        if proc.returncode == 0:
-            await update.message.reply_text(
-                f"Estilo {nombre} procesado exitosamente!\n"
-                f"Colores: {', '.join(colores)} | Proveedor: {proveedor}"
-            )
-            await _enviar_imagenes_generadas(update, context, carpeta, nombre, colores)
-        else:
-            stderr_preview = (proc.stderr or proc.stdout or "Sin detalle")[:800]
-            await update.message.reply_text(
-                f"Estilo {nombre} - pipeline con errores:\n\n{stderr_preview}"
-            )
-
-    except subprocess.TimeoutExpired:
         await update.message.reply_text(
-            f"El pipeline tardo demasiado (mas de 5 min).\n"
-            f"Archivos guardados en: {carpeta}\n"
-            "Ejecuta el pipeline manualmente."
+            f"⚙️ Pipeline iniciado para *{nombre}*\n"
+            f"Te notifico cuando termine.",
+            parse_mode="Markdown",
         )
+
     except Exception as exc:
         logger.error("Error procesando %s: %s", nombre, exc, exc_info=True)
         await update.message.reply_text(
