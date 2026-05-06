@@ -422,7 +422,7 @@ def _run_pipeline(nombre: str, carpeta: str, chat_id: str, token: str) -> None:
             [sys.executable, str(PIPELINE_SCRIPT), nombre],
             capture_output=True,
             text=True,
-            timeout=1800,
+            timeout=600,
         )
         if proc.stdout:
             logger.info("Pipeline stdout [%s]:\n%s", nombre, proc.stdout[:2000])
