@@ -404,7 +404,7 @@ def _verificar_consistencia_close(imagenes, producto_dir, nombre, output_dir):
     return imagenes
 
 def generar_collage(nombre, output_dir, producto_dir=None):
-    patron   = re.compile(rf'^{re.escape(nombre)}_([A-Za-z]+)_\d+_close\.jpg$', re.IGNORECASE)
+    patron   = re.compile(rf'^{re.escape(nombre)}_([A-Za-z]+)_\d+_close(?:_REVISAR)?\.jpg$', re.IGNORECASE)
     por_color = {}
     for f in sorted(output_dir.iterdir()):
         m = patron.match(f.name)
@@ -911,7 +911,7 @@ def _enviar_notificacion_telegram(nombre, producto_dir, precio_raw, colores_todo
 
     try:
         # MENSAJE 1: álbum con todas las _close + URL Shopify
-        patron_close   = re.compile(rf'^{re.escape(nombre)}_([A-Za-z][A-Za-z0-9_]*)_\d+_close\.jpg$', re.IGNORECASE)
+        patron_close   = re.compile(rf'^{re.escape(nombre)}_([A-Za-z][A-Za-z0-9_]*)_\d+_close(?:_REVISAR)?\.jpg$', re.IGNORECASE)
         imagenes_close = sorted(p for p in output_dir.iterdir() if patron_close.match(p.name))
         print(f"  Imágenes _close encontradas: {len(imagenes_close)}")
         lineas_album   = [
@@ -1122,7 +1122,8 @@ def procesar_producto(producto_dir):
     )
     colores_todos  = sorted(set(c for c, _, _ in archivos))
     faltantes      = [(c, n, f) for c, n, f in archivos
-                      if not (output_dir / f"{nombre}_{c}_{n}_close.jpg").exists()]
+                      if not (output_dir / f"{nombre}_{c}_{n}_close.jpg").exists()
+                      and not (output_dir / f"{nombre}_{c}_{n}_close_REVISAR.jpg").exists()]
     colores_nuevos = sorted(set(c for c, _, _ in faltantes))
 
     descripcion_existe = (producto_dir / "descripcion_shopify.txt").exists()
@@ -1156,8 +1157,6 @@ def procesar_producto(producto_dir):
         if collage_path.exists():
             collage_path.unlink()
         generar_collage(nombre, output_dir, producto_dir)
-
-        _enviar_notificacion_telegram(nombre, producto_dir, procesar_data.get("precio", ""), colores_todos, tallas=procesar_data.get("tallas", ""))
 
     elif campos_info and descripcion_existe:
         print("  Regenerando descripcion (info actualizada)...")
