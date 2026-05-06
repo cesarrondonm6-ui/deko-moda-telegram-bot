@@ -734,20 +734,204 @@ def _telegram_ok(nombre, colores, precio_raw, producto_dir, tallas):
 def _telegram_error(nombre, error_msg):
     _telegram_send(f"DEKO MODA - Error en pipeline\n\nEstilo: {nombre}\nError: {error_msg}")
 
-def enviar_imagen_telegram(image_path, caption):
+def enviar_imagen_telegram(image_path, caption, parse_mode=None):
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT:
         print("  Telegram: TOKEN o CHAT no configurado, saltando envio de imagen")
         return
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendPhoto"
     try:
         with open(image_path, "rb") as f:
-            r = requests.post(url,
-                data={"chat_id": TELEGRAM_CHAT, "caption": caption},
-                files={"photo": f})
+            data = {"chat_id": TELEGRAM_CHAT, "caption": caption}
+            if parse_mode:
+                data["parse_mode"] = parse_mode
+            r = requests.post(url, data=data, files={"photo": f})
         if r.status_code != 200:
             print(f"  Telegram foto: error {r.status_code} — {r.text[:200]}")
     except Exception as e:
         print(f"  Telegram foto: {e}")
+
+
+def _telegram_send_album(imagenes, caption):
+    """Envía un álbum (sendMediaGroup) con las imágenes dadas; caption en el último item."""
+    if not TELEGRAM_TOKEN or not TELEGRAM_CHAT:
+        print("  Telegram álbum: no configurado, saltando")
+        return
+    if not imagenes:
+        return
+    url   = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMediaGroup"
+    media = []
+    files = {}
+    for i, img_path in enumerate(imagenes):
+        key  = f"photo{i}"
+        item = {"type": "photo", "media": f"attach://{key}"}
+        if i == len(imagenes) - 1 and caption:
+            item["caption"] = caption
+        media.append(item)
+        files[key] = open(img_path, "rb")
+    try:
+        r = requests.post(url, data={"chat_id": TELEGRAM_CHAT, "media": json.dumps(media)}, files=files)
+        if r.status_code != 200:
+            print(f"  Telegram álbum: error {r.status_code} — {r.text[:200]}")
+    except Exception as e:
+        print(f"  Telegram álbum: {e}")
+    finally:
+        for f in files.values():
+            f.close()
+
+
+def _shopify_subir_collage_files(collage_path):
+    """Sube el collage a Shopify Files via GraphQL y retorna la URL pública."""
+    if not SHOPIFY_TOKEN:
+        print("  Shopify Files: no configurado, saltando")
+        return None
+    gql_url = f"https://{SHOPIFY_SHOP}.myshopify.com/admin/api/2024-01/graphql.json"
+    headers = {"Content-Type": "application/json", "X-Shopify-Access-Token": SHOPIFY_TOKEN}
+    # 1) Staged upload
+    try:
+        r1 = requests.post(gql_url, headers=headers, json={
+            "query": """
+            mutation stagedUploadsCreate($input: [StagedUploadInput!]!) {
+              stagedUploadsCreate(input: $input) {
+                stagedTargets { url resourceUrl parameters { name value } }
+                userErrors { field message }
+              }
+            }""",
+            "variables": {"input": [{
+                "filename": collage_path.name, "mimeType": "image/jpeg",
+                "httpMethod": "POST", "resource": "IMAGE",
+                "fileSize": str(collage_path.stat().st_size),
+            }]}
+        })
+        d1 = r1.json()
+        targets = d1.get("data", {}).get("stagedUploadsCreate", {}).get("stagedTargets", [])
+        if not targets:
+            print(f"  Shopify Files staged: sin targets — {d1}")
+            return None
+        t      = targets[0]
+        params = {p["name"]: p["value"] for p in t["parameters"]}
+    except Exception as e:
+        print(f"  Shopify Files staged upload: {e}")
+        return None
+    # 2) Upload a S3
+    try:
+        with open(collage_path, "rb") as f:
+            r2 = requests.post(t["url"], data=params, files={"file": (collage_path.name, f, "image/jpeg")})
+        if r2.status_code not in (200, 201, 204):
+            print(f"  Shopify Files S3: error {r2.status_code} — {r2.text[:200]}")
+            return None
+    except Exception as e:
+        print(f"  Shopify Files S3 upload: {e}")
+        return None
+    # 3) fileCreate
+    try:
+        r3 = requests.post(gql_url, headers=headers, json={
+            "query": """
+            mutation fileCreate($files: [FileCreateInput!]!) {
+              fileCreate(files: $files) {
+                files {
+                  id
+                  ... on MediaImage { image { url } }
+                  ... on GenericFile { url }
+                }
+                userErrors { field message }
+              }
+            }""",
+            "variables": {"files": [{
+                "originalSource": t["resourceUrl"], "contentType": "IMAGE",
+                "alt": collage_path.stem,
+            }]}
+        })
+        d3 = r3.json()
+        errs = d3.get("data", {}).get("fileCreate", {}).get("userErrors", [])
+        if errs:
+            print(f"  Shopify Files fileCreate errors: {errs}")
+        file_id = None
+        for fc in d3.get("data", {}).get("fileCreate", {}).get("files", []):
+            url = fc.get("url") or (fc.get("image") or {}).get("url")
+            if url:
+                return url
+            file_id = fc.get("id")
+    except Exception as e:
+        print(f"  Shopify Files fileCreate: {e}")
+        return None
+    # 4) Polling — Shopify procesa de forma asíncrona
+    if not file_id:
+        print("  Shopify Files: sin id, no se puede hacer polling")
+        return None
+    print("  Shopify Files: esperando que el archivo esté disponible...")
+    for intento in range(5):
+        time.sleep(3)
+        try:
+            r_poll = requests.post(gql_url, headers=headers, json={
+                "query": """
+                query getFile($id: ID!) {
+                  node(id: $id) {
+                    ... on MediaImage { image { url } }
+                    ... on GenericFile { url }
+                  }
+                }""",
+                "variables": {"id": file_id}
+            })
+            node = r_poll.json().get("data", {}).get("node", {})
+            url  = node.get("url") or (node.get("image") or {}).get("url")
+            if url:
+                print(f"  Shopify Files: URL disponible (intento {intento + 1})")
+                return url
+        except Exception as e:
+            print(f"  Shopify Files polling {intento + 1}: {e}")
+    print("  Shopify Files: URL no disponible tras 15 seg")
+    return None
+
+
+def _enviar_notificacion_telegram(nombre, producto_dir, precio_raw, colores_todos, tallas=""):
+    output_dir   = producto_dir / "imagenes_generadas"
+    collage_path = output_dir / f"{nombre}_collage.jpg"
+
+    # Subir collage a Shopify primero para incluir URL en MENSAJE 1
+    url_collage = None
+    if collage_path.exists() and SHOPIFY_TOKEN:
+        print("  Subiendo collage a Shopify Files...")
+        url_collage = _shopify_subir_collage_files(collage_path)
+        if url_collage:
+            print(f"  Shopify Files URL: {url_collage}")
+        else:
+            print("  Shopify Files: URL no disponible")
+
+    # MENSAJE 1: álbum con todas las _close + URL Shopify
+    patron_close   = re.compile(rf'^{re.escape(nombre)}_([A-Za-z][A-Za-z0-9_]*)_\d+_close\.jpg$', re.IGNORECASE)
+    imagenes_close = sorted(p for p in output_dir.iterdir() if patron_close.match(p.name))
+    lineas_album   = [
+        f"✅ {nombre} — Imágenes generadas",
+        f"📸 Imágenes creadas: {_gemini_calls}",
+        f"🤖 Llamadas Gemini: {_gemini_calls}",
+    ]
+    if url_collage:
+        lineas_album.append(f"🔗 Collage en Shopify:\n{url_collage}")
+    _telegram_send_album(imagenes_close, "\n".join(lineas_album))
+
+    # MENSAJE 2: collage con datos del producto
+    info_not     = leer_info_txt(producto_dir)
+    material     = info_not.get("material", "")
+    material_fmt = f"{material} 🐮" if "cuero" in material.lower() else material
+    try:
+        precio_fmt = f"${int(precio_raw):,}".replace(",", ".") if str(precio_raw).isdigit() else precio_raw
+    except Exception:
+        precio_fmt = precio_raw
+    colores_str    = " | ".join(c.replace("_", " ").title() for c in sorted(colores_todos))
+    lineas_caption = [f"*Ref. {nombre.title()}*"]
+    if material_fmt:
+        lineas_caption.append(f"Material: *{material_fmt}*")
+    lineas_caption.append(colores_str)
+    lineas_caption.append("")
+    if precio_fmt:
+        lineas_caption.append(f"*{precio_fmt} 🚚 Envío gratis*")
+    lineas_caption.append("Pedidos 📲 300 319 1553")
+    caption_collage = "\n".join(lineas_caption)
+
+    if collage_path.exists():
+        enviar_imagen_telegram(collage_path, caption=caption_collage, parse_mode="Markdown")
+    else:
+        _telegram_send(caption_collage)
 
 def esperar_respuesta_telegram(timeout=1800):
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT:
@@ -919,7 +1103,7 @@ def procesar_producto(producto_dir):
     )
     colores_todos  = sorted(set(c for c, _, _ in archivos))
     faltantes      = [(c, n, f) for c, n, f in archivos
-                      if not (output_dir / f"{nombre}_{c}_{n}.jpg").exists()]
+                      if not (output_dir / f"{nombre}_{c}_{n}_close.jpg").exists()]
     colores_nuevos = sorted(set(c for c, _, _ in faltantes))
 
     descripcion_existe = (producto_dir / "descripcion_shopify.txt").exists()
@@ -931,27 +1115,21 @@ def procesar_producto(producto_dir):
         print(f"  Colores sin imagenes: {colores_nuevos}")
 
     if hay_faltantes:
-        prompt_path       = producto_dir / "prompt_nanobanana.txt"
         prompt_close_path = producto_dir / "prompt_nanobanana_close.txt"
-        prompt = open(prompt_path, encoding="utf-8").read() if prompt_path.exists() else analizar_referencia(referencia)
-        if not prompt_path.exists():
-            open(prompt_path, "w", encoding="utf-8").write(prompt)
-            print("  Prompt cuerpo completo: generado")
+        if prompt_close_path.exists():
+            prompt_close = open(prompt_close_path, encoding="utf-8").read()
+            print("  Prompt plano cerrado: reutilizando")
         else:
-            print("  Prompt cuerpo completo: reutilizando")
-        prompt_close = open(prompt_close_path, encoding="utf-8").read() if prompt_close_path.exists() else analizar_referencia_close(referencia)
-        if not prompt_close_path.exists():
+            prompt_close = analizar_referencia_close(referencia)
             open(prompt_close_path, "w", encoding="utf-8").write(prompt_close)
             print("  Prompt plano cerrado: generado")
-        else:
-            print("  Prompt plano cerrado: reutilizando")
 
         print(f"\n  Generando: {[f'{c}_{n}' for c,n,_ in faltantes]}")
         for color, numero, archivo in faltantes:
             print(f"\n  --- {color}_{numero} ---")
             zapato_img  = PIL.Image.open(archivo)
             nombre_base = f"{nombre}_{color}_{numero}"
-            _generar_variante(prompt,       zapato_img, archivo, output_dir, nombre_base, sufijo="")
+            # Escena completa desactivada — solo _close
             _generar_variante(prompt_close, zapato_img, archivo, output_dir, nombre_base, sufijo="_close")
 
         print("\n  Regenerando collage...")
@@ -960,31 +1138,7 @@ def procesar_producto(producto_dir):
             collage_path.unlink()
         generar_collage(nombre, output_dir, producto_dir)
 
-        # Enviar collage y esperar autorización Telegram
-        if collage_path.exists():
-            enviar_imagen_telegram(collage_path, caption=(
-                f"Imagenes generadas — {nombre}\n\n"
-                f"Llamadas a Gemini: {_gemini_calls}\n"
-                f"Imagenes generadas: {_gemini_calls}\n\n"
-                "Continuar con fondo blanco + Shopify?\n"
-                "Responde SI para continuar o NO para detener."
-            ))
-        respuesta = esperar_respuesta_telegram(timeout=1800)
-
-        if respuesta == "SI":
-            # DESACTIVADO TEMPORALMENTE — requiere autorización Telegram
-            generar_web(nombre, producto_dir, output_dir)
-
-            if descripcion_existe:
-                print("  Regenerando descripcion (nuevos colores)...")
-                (producto_dir / "descripcion_shopify.txt").unlink()
-            if info_completa or campos_info:
-                generar_descripcion_shopify(nombre, referencia, colores_todos, producto_dir,
-                                            precio=procesar_data.get("precio", "N/D"))
-        else:
-            _telegram_send(f"Proceso detenido para {nombre}")
-            (producto_dir / "PROCESAR.txt").unlink(missing_ok=True)
-            return
+        _enviar_notificacion_telegram(nombre, producto_dir, procesar_data.get("precio", ""), colores_todos, tallas=procesar_data.get("tallas", ""))
 
     elif campos_info and descripcion_existe:
         print("  Regenerando descripcion (info actualizada)...")
@@ -1014,7 +1168,7 @@ def procesar_producto(producto_dir):
 
     (producto_dir / "PROCESAR.txt").unlink(missing_ok=True)
     print(f"\n{nombre} completado!")
-    _telegram_ok(nombre, colores_todos, precio_shopify, producto_dir, SHOPIFY_TALLAS)
+    _enviar_notificacion_telegram(nombre, producto_dir, precio_shopify, colores_todos, tallas=procesar_data.get("tallas", ""))
 
 
 # ── Entrypoint ────────────────────────────────────────────────────────────────
