@@ -303,7 +303,7 @@ def _generar_variante(prompt, zapato_img, archivo_original, output_dir, nombre_b
             c  = qa.get("criterios", {})
             aprobada = qa.get("aprobada", False)
             print(f"  [{sufijo}] Zapato:{c.get('zapato_visible')} Plano:{c.get('plano_cerrado')} "
-                  f"Ambos:{c.get('ambos_zapatos_visibles')} Fiel:{c.get('zapato_fiel_al_original')}")
+                  f"Fiel:{c.get('zapato_fiel_al_original')}")
             if aprobada:
                 output = output_dir / f"{nombre_base}{sufijo}.jpg"
                 open(output, "wb").write(img_bytes)
@@ -313,7 +313,7 @@ def _generar_variante(prompt, zapato_img, archivo_original, output_dir, nombre_b
                     _guardar_caracteristicas(output_dir.parent, zapato_data)
                 break
             else:
-                print(f"  [{sufijo}] RECHAZADA: {qa.get('motivo_rechazo','')}")
+                print(f"  [QA] RECHAZADA {sufijo}: {qa}")
         except Exception as e:
             print(f"  [{sufijo}] Error: {e}")
     if not aprobada and img_bytes:
