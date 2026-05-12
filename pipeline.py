@@ -1321,6 +1321,12 @@ def procesar_producto(producto_dir):
                                       colores_todos, tallas=procesar_data.get("tallas", ""))
 
         # ── PAUSA: esperar SI/NO (30 min) ────────────────────────────────────
+        _telegram_send(
+            f"👆 *{nombre}* — ¿Continuar con FASE 2?\n\n"
+            f"Responde *SI* para generar escena completa, imágenes web e historia IG.\n"
+            f"Responde *NO* para cancelar.\n\n"
+            f"⏱ Timeout: 30 minutos"
+        )
         respuesta = esperar_respuesta_telegram(timeout=1800)
 
         if respuesta == "SI":
