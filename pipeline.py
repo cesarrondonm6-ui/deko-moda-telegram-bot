@@ -108,11 +108,13 @@ INSTRUCCION: El calzado sera proporcionado posteriormente. NO describir, NO modi
 
 PROMPT_MAESTRO_CLOSE = """Analiza la imagen de referencia y extrae SOLO los campos variables indicados. Responde UNICAMENTE con el JSON, sin texto adicional, sin markdown.
 
+IMPORTANTE: NO describas el calzado en ningun campo. El zapato sera proporcionado por separado como imagen de referencia.
+
 {
   "ambiente_general": "[ambiente, tonalidad, atmosfera de la escena]",
   "fondo_y_entorno": "[fondo, entorno, elementos arquitectonicos o naturales]",
-  "posicion_del_cuerpo": "[posicion de las piernas/pies visible desde la pantorrilla hacia abajo]",
-  "vestuario_visible": "[pantalon o parte inferior: color, tela, caida, largo]",
+  "posicion_del_cuerpo": "[posicion de las piernas visibles desde la pantorrilla hacia abajo: postura, separacion de pies, orientacion. NO mencionar el calzado ni describir zapatos]",
+  "vestuario_visible": "[pantalon o parte inferior: color, tela, caida, largo. NO mencionar el calzado]",
   "piso": "[tipo y descripcion del piso o superficie]",
   "iluminacion": "[tipo de iluminacion, tonalidad, sombras]"
 }"""
