@@ -106,21 +106,31 @@ Piso:
 Iluminacion:
 INSTRUCCION: El calzado sera proporcionado posteriormente. NO describir, NO modificar."""
 
-PROMPT_MAESTRO_CLOSE = """Analiza la imagen y genera PROMPT FINAL para Nanobanana - PLANO CERRADO.
-Mantener el mismo ambiente, fondo, entorno, piso e iluminacion de la escena pero con encuadre cerrado en los pies.
-NO describir el zapato.
+PROMPT_MAESTRO_CLOSE = """Analiza la imagen de referencia y extrae SOLO los campos variables indicados. Responde UNICAMENTE con el JSON, sin texto adicional, sin markdown.
 
-PROMPT PARA GENERAR IMAGEN - PLANO CERRADO
+{
+  "ambiente_general": "[ambiente, tonalidad, atmosfera de la escena]",
+  "fondo_y_entorno": "[fondo, entorno, elementos arquitectonicos o naturales]",
+  "posicion_del_cuerpo": "[posicion de las piernas/pies visible desde la pantorrilla hacia abajo]",
+  "vestuario_visible": "[pantalon o parte inferior: color, tela, caida, largo]",
+  "piso": "[tipo y descripcion del piso o superficie]",
+  "iluminacion": "[tipo de iluminacion, tonalidad, sombras]"
+}"""
 
-Ambiente general:
-Fondo y entorno:
-Composicion de camara: Plano medio-cerrado desde debajo de la pantorrilla hacia abajo, camara a nivel del suelo ligeramente elevada, perfil lateral 100%, ambos zapatos visibles en todo momento, espacio inferior amplio en la composicion
-Posicion del cuerpo: Modelo en posicion completamente lateral perfil 100%, solo visible desde debajo de la pantorrilla hacia abajo, perfil lateral completo del calzado visible
-Vestuario visible:
-Piso:
-Iluminacion:
+_PLANTILLA_CLOSE = """PROMPT PARA GENERAR IMAGEN - PLANO CERRADO EXTREMO
+
+Ambiente general: {ambiente_general}
+Fondo y entorno: {fondo_y_entorno}
+Composición de cámara: Plano cerrado EXTREMO desde la pantorrilla hacia abajo, el zapato ocupa el 70% del encuadre siendo el protagonista absoluto, cámara a nivel del suelo apuntando ligeramente hacia arriba, encuadre vertical, ambos zapatos visibles y centrados en el encuadre, el zapato se ve grande y cercano llenando el frame, espacio inferior amplio.
+Posicion del cuerpo: {posicion_del_cuerpo}
+Orientacion del zapato: OBLIGATORIO — los zapatos deben estar orientados de izquierda a derecha: la punta del zapato apunta hacia la DERECHA y la parte trasera (talon/suela) queda hacia la IZQUIERDA. Ambos zapatos deben mirar en la misma direccion.
+Vestuario visible: {vestuario_visible}. El pantalon NO puede tapar ni cubrir el zapato bajo ninguna circunstancia. El dobladillo del pantalon debe quedar por encima del tobillo dejando el zapato completamente expuesto. PROHIBIDO que el pantalon cubra cualquier parte del zapato. El zapato debe ser el elemento mas prominente y visible desde el tobillo hacia abajo. Si el pantalon tapa el zapato la imagen es incorrecta.
+Piso: {piso}
+Iluminacion: {iluminacion}
 No incluir bolsos, carteras ni accesorios de mano en la imagen.
-INSTRUCCION: El calzado sera proporcionado posteriormente. NO describir, NO modificar."""
+INSTRUCCIÓN CRÍTICA — FIDELIDAD DEL CALZADO: El calzado será proporcionado directamente como imagen de referencia. Es OBLIGATORIO reproducirlo con fidelidad absoluta: mismo diseño exacto, mismo color, mismos materiales, misma forma, mismos detalles (hebillas, costuras, suela, puntera, tacón). NO describir, NO modificar, NO simplificar, NO recrear. El zapato en la imagen final debe ser idéntico al de la referencia. Si el zapato no es fiel al original, la imagen es incorrecta.
+
+Formato cuadrado 4:4"""
 
 CRITERIOS_QA = """Analiza estas DOS imagenes:
 IMAGEN 1: Zapato ORIGINAL (referencia)
@@ -212,7 +222,20 @@ def analizar_referencia(referencia_path):
     return _analizar_con_prompt(referencia_path, PROMPT_MAESTRO, "cuerpo completo")
 
 def analizar_referencia_close(referencia_path):
-    return _analizar_con_prompt(referencia_path, PROMPT_MAESTRO_CLOSE, "plano cerrado")
+    raw = _analizar_con_prompt(referencia_path, PROMPT_MAESTRO_CLOSE, "plano cerrado")
+    try:
+        m = re.search(r'\{.*\}', raw, re.DOTALL)
+        data = json.loads(m.group()) if m else {}
+    except (json.JSONDecodeError, AttributeError):
+        data = {}
+    return _PLANTILLA_CLOSE.format(
+        ambiente_general=data.get("ambiente_general", ""),
+        fondo_y_entorno=data.get("fondo_y_entorno", ""),
+        posicion_del_cuerpo=data.get("posicion_del_cuerpo", ""),
+        vestuario_visible=data.get("vestuario_visible", ""),
+        piso=data.get("piso", ""),
+        iluminacion=data.get("iluminacion", ""),
+    )
 
 
 # ── Generación de imágenes ────────────────────────────────────────────────────
