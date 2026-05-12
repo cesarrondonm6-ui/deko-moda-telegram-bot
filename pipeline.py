@@ -5,6 +5,7 @@ import re
 import time
 import math
 import base64
+import shutil
 import urllib.request
 import urllib.error
 import requests
@@ -582,6 +583,33 @@ def generar_collage(nombre, output_dir, producto_dir=None):
     output = output_dir / f"{nombre}_collage.jpg"
     canvas.save(output, "JPEG", quality=92)
     print(f"  Collage: {output.name} ({n} colores, {rows}x{cols}, {canvas_w}x{canvas_h}px)")
+
+
+# ── Copia central de imágenes ─────────────────────────────────────────────────
+def _copiar_imagenes_centrales(nombre, output_dir):
+    """Copia una _close por color a PRODUCTOS_DIR/ y el collage a PRODUCTOS_DIR/COLLAGE/."""
+    dir_collage = PRODUCTOS_DIR / "COLLAGE"
+    dir_collage.mkdir(exist_ok=True)
+
+    patron = re.compile(
+        rf'^{re.escape(nombre)}_([A-Za-z][A-Za-z0-9_]*)_\d+_close(?:_REVISAR)?\.jpg$',
+        re.IGNORECASE
+    )
+    por_color = {}
+    for f in sorted(output_dir.iterdir()):
+        m = patron.match(f.name)
+        if m:
+            color = m.group(1).upper()
+            if color not in por_color:
+                por_color[color] = f
+    for src in por_color.values():
+        shutil.copy2(src, PRODUCTOS_DIR / src.name)
+        print(f"  Central plano cerrado: {src.name}")
+
+    collage = output_dir / f"{nombre}_collage.jpg"
+    if collage.exists():
+        shutil.copy2(collage, dir_collage / collage.name)
+        print(f"  Central collage: {collage.name}")
 
 
 # ── Historia IG/FB ────────────────────────────────────────────────────────────
@@ -1330,6 +1358,7 @@ def procesar_producto(producto_dir):
         if collage_path.exists():
             collage_path.unlink()
         generar_collage(nombre, output_dir, producto_dir)
+        _copiar_imagenes_centrales(nombre, output_dir)
 
         # ── Telegram FASE 1 ──────────────────────────────────────────────────
         _enviar_notificacion_telegram(nombre, producto_dir, procesar_data.get("precio", ""),
