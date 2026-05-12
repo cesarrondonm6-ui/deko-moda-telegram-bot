@@ -119,6 +119,48 @@ IMPORTANTE: NO describas el calzado en ningun campo. El zapato sera proporcionad
   "iluminacion": "[tipo de iluminacion, tonalidad, sombras]"
 }"""
 
+PROMPT_MAESTRO_COMBINED = """Analiza la imagen de referencia UNA SOLA VEZ y genera DOS prompts para Gemini. No repitas el analisis.
+
+FORMATO DE SALIDA OBLIGATORIO: usa exactamente estos separadores literales, sin markdown, sin #, sin **, sin modificaciones:
+===PROMPT 1 — ESCENA COMPLETA===
+[contenido del prompt 1]
+===PROMPT 2 — PLANO CERRADO EXTREMO===
+[contenido del prompt 2]
+
+===PROMPT 1 — ESCENA COMPLETA===
+
+Analiza la imagen y genera PROMPT FINAL para Nanobanana.
+Imagen de cuerpo completo, mostrando la figura entera de la modelo desde la cabeza hasta los pies.
+NO describir el zapato.
+
+PROMPT PARA GENERAR IMAGEN
+Imagen de cuerpo completo, mostrando la figura entera de la modelo desde la cabeza hasta los pies
+
+Ambiente general:
+Fondo y entorno:
+Composicion de camara: Encuadre vertical, cuerpo completo desde cabeza hasta pies, perfil lateral, ambos zapatos visibles, espacio inferior amplio
+Posicion del cuerpo:
+Vestuario visible:
+Piso:
+Iluminacion:
+INSTRUCCION: El calzado sera proporcionado posteriormente. NO describir, NO modificar.
+
+Formato de imagen: 9:16 vertical.
+
+===PROMPT 2 — PLANO CERRADO EXTREMO===
+
+Analiza la misma imagen y extrae SOLO los campos variables. Responde UNICAMENTE con el JSON.
+IMPORTANTE: NO describas el calzado en ningun campo. El zapato sera proporcionado por separado.
+
+{
+  "ambiente_general": "[ambiente, tonalidad, atmosfera]",
+  "fondo_y_entorno": "[fondo, entorno, elementos]",
+  "posicion_del_cuerpo": "[posicion de las piernas desde pantorrilla hacia abajo: postura, separacion, orientacion. NO mencionar el calzado]",
+  "vestuario_visible": "[pantalon o parte inferior: color, tela, caida. NO mencionar el calzado]",
+  "piso": "[tipo de piso]",
+  "iluminacion": "[iluminacion]"
+}"""
+
 _PLANTILLA_CLOSE = """PROMPT PARA GENERAR IMAGEN - PLANO CERRADO EXTREMO
 
 Ambiente general: {ambiente_general}
@@ -222,6 +264,39 @@ def _analizar_con_prompt(referencia_path, prompt_template, label):
 
 def analizar_referencia(referencia_path):
     return _analizar_con_prompt(referencia_path, PROMPT_MAESTRO, "cuerpo completo")
+
+def analizar_referencias(referencia_path):
+    print("  Analizando referencia (escena completa + plano cerrado — una sola llamada)...")
+    ext        = referencia_path.suffix.lower().replace(".", "")
+    media_type = "image/png" if ext == "png" else "image/jpeg"
+    img_b64    = base64.standard_b64encode(open(referencia_path, "rb").read()).decode()
+    response   = claude_client.messages.create(
+        model="claude-opus-4-6", max_tokens=3000,
+        messages=[{"role": "user", "content": [
+            {"type": "image", "source": {"type": "base64", "media_type": media_type, "data": img_b64}},
+            {"type": "text",  "text": PROMPT_MAESTRO_COMBINED}
+        ]}]
+    )
+    texto  = response.content[0].text
+    partes = re.split(r'(?:===PROMPT \d+[^\n=]*===|#{1,3}\s*PROMPT \d+[^\n]*)', texto, flags=re.IGNORECASE)
+    prompt1 = partes[1].strip() if len(partes) > 1 else texto
+    raw2    = partes[2].strip() if len(partes) > 2 else ""
+    if len(partes) < 3:
+        print("  AVISO: no se encontraron separadores en la respuesta de Claude")
+    try:
+        m    = re.search(r'\{.*\}', raw2, re.DOTALL)
+        data = json.loads(m.group()) if m else {}
+    except (json.JSONDecodeError, AttributeError):
+        data = {}
+    prompt2 = _PLANTILLA_CLOSE.format(
+        ambiente_general=data.get("ambiente_general", ""),
+        fondo_y_entorno=data.get("fondo_y_entorno", ""),
+        posicion_del_cuerpo=data.get("posicion_del_cuerpo", ""),
+        vestuario_visible=data.get("vestuario_visible", ""),
+        piso=data.get("piso", ""),
+        iluminacion=data.get("iluminacion", ""),
+    )
+    return prompt1, prompt2
 
 def analizar_referencia_close(referencia_path):
     raw = _analizar_con_prompt(referencia_path, PROMPT_MAESTRO_CLOSE, "plano cerrado")
@@ -507,6 +582,57 @@ def generar_collage(nombre, output_dir, producto_dir=None):
     output = output_dir / f"{nombre}_collage.jpg"
     canvas.save(output, "JPEG", quality=92)
     print(f"  Collage: {output.name} ({n} colores, {rows}x{cols}, {canvas_w}x{canvas_h}px)")
+
+
+# ── Historia IG/FB ────────────────────────────────────────────────────────────
+def generar_historia(nombre, output_dir):
+    HISTORIA_W      = 1080
+    HISTORIA_H      = 1920
+    HISTORIA_HEADER = 200
+    patron = re.compile(rf'^{re.escape(nombre)}_([A-Za-z][A-Za-z0-9_]*)_web_lateral\.jpg$', re.IGNORECASE)
+    por_color = {}
+    for f in sorted(output_dir.iterdir()):
+        m = patron.match(f.name)
+        if m:
+            por_color[m.group(1).upper()] = f
+    if not por_color:
+        print("  Historia: no se encontraron imagenes _web_lateral")
+        return None
+    colores = sorted(por_color.keys())
+    n       = len(colores)
+    canvas  = PIL.Image.new("RGB", (HISTORIA_W, HISTORIA_H), (255, 255, 255))
+    draw    = PIL.ImageDraw.Draw(canvas)
+    font = None
+    for fp in COLLAGE_FONT_PATHS:
+        try:
+            font = PIL.ImageFont.truetype(fp, COLLAGE_FONT_SIZE)
+            break
+        except Exception:
+            pass
+    if font is None:
+        font = PIL.ImageFont.load_default()
+    bt = draw.textbbox((0, 0), nombre.upper(), font=font)
+    tw, th = bt[2] - bt[0], bt[3] - bt[1]
+    draw.text(((HISTORIA_W - tw) // 2, (HISTORIA_HEADER - th) // 2),
+              nombre.upper(), fill=COLLAGE_GOLD, font=font)
+    zona_h = HISTORIA_H - HISTORIA_HEADER
+    sec_h  = zona_h // n
+    for i, color in enumerate(colores):
+        img    = PIL.Image.open(por_color[color]).convert("RGB")
+        iw, ih = img.size
+        margen = int(sec_h * 0.06)
+        max_h  = sec_h - 2 * margen
+        max_w  = HISTORIA_W - 2 * margen
+        scale  = min(max_w / iw, max_h / ih)
+        nw, nh = round(iw * scale), round(ih * scale)
+        img_r  = img.resize((nw, nh), PIL.Image.LANCZOS)
+        x = (HISTORIA_W - nw) // 2
+        y = HISTORIA_HEADER + i * sec_h + (sec_h - nh) // 2
+        canvas.paste(img_r, (x, y))
+    output = output_dir / f"{nombre}_historia.jpg"
+    canvas.save(output, "JPEG", quality=92)
+    print(f"  Historia: {output.name} ({n} colores, {HISTORIA_W}x{HISTORIA_H}px)")
+    return output
 
 
 # ── Imágenes web ──────────────────────────────────────────────────────────────
@@ -1161,29 +1287,77 @@ def procesar_producto(producto_dir):
         print(f"  Colores sin imagenes: {colores_nuevos}")
 
     if hay_faltantes:
+        # ── Prompts: una sola llamada Claude Vision para ambos ───────────────
+        prompt_path       = producto_dir / "prompt_nanobanana.txt"
         prompt_close_path = producto_dir / "prompt_nanobanana_close.txt"
-        if prompt_close_path.exists():
+        if prompt_path.exists() and prompt_close_path.exists():
+            prompt       = open(prompt_path,       encoding="utf-8").read()
             prompt_close = open(prompt_close_path, encoding="utf-8").read()
-            print("  Prompt plano cerrado: reutilizando")
+            print("  Prompts: reutilizando existentes")
         else:
-            prompt_close = analizar_referencia_close(referencia)
+            prompt, prompt_close = analizar_referencias(referencia)
+            open(prompt_path,       "w", encoding="utf-8").write(prompt)
             open(prompt_close_path, "w", encoding="utf-8").write(prompt_close)
-            print("  Prompt plano cerrado: generado")
+            print("  Prompts: generados (una sola llamada a Claude Vision)")
             _telegram_send(f"📋 Prompt _close generado para {nombre}:\n\n{prompt_close}")
 
-        print(f"\n  Generando: {[f'{c}_{n}' for c,n,_ in faltantes]}")
+        # ── FASE 1: imágenes _close ──────────────────────────────────────────
+        print(f"\n  FASE 1 — Generando _close: {[f'{c}_{n}' for c,n,_ in faltantes]}")
         for color, numero, archivo in faltantes:
             print(f"\n  --- {color}_{numero} ---")
             zapato_img  = PIL.Image.open(archivo)
             nombre_base = f"{nombre}_{color}_{numero}"
-            # Escena completa desactivada — solo _close
-            _generar_variante(prompt_close, zapato_img, archivo, output_dir, nombre_base, sufijo="_close")
+            _generar_variante(prompt_close, zapato_img, archivo, output_dir, nombre_base, "_close")
 
+        # ── Collage ──────────────────────────────────────────────────────────
         print("\n  Regenerando collage...")
         collage_path = output_dir / f"{nombre}_collage.jpg"
         if collage_path.exists():
             collage_path.unlink()
         generar_collage(nombre, output_dir, producto_dir)
+
+        # ── Telegram FASE 1 ──────────────────────────────────────────────────
+        _enviar_notificacion_telegram(nombre, producto_dir, procesar_data.get("precio", ""),
+                                      colores_todos, tallas=procesar_data.get("tallas", ""))
+
+        # ── PAUSA: esperar SI/NO (30 min) ────────────────────────────────────
+        respuesta = esperar_respuesta_telegram(timeout=1800)
+
+        if respuesta == "SI":
+            # ── FASE 2 ───────────────────────────────────────────────────────
+
+            print("\n  FASE 2 — Generando escena completa (9:16)...")
+            for color, numero, archivo in archivos:
+                print(f"\n  --- Escena {color}_{numero} ---")
+                zapato_img  = PIL.Image.open(archivo)
+                nombre_base = f"{nombre}_{color}_{numero}"
+                _generar_variante(prompt, zapato_img, archivo, output_dir, nombre_base, "")
+
+            generar_web(nombre, producto_dir, output_dir)
+
+            historia_path = generar_historia(nombre, output_dir)
+
+            generar_descripcion_shopify(nombre, referencia, colores_todos, producto_dir,
+                                        precio=procesar_data.get("precio", "N/D"))
+
+            precio_shopify = procesar_data.get("precio", "0")
+            if SHOPIFY_TOKEN:
+                desc_ok = (producto_dir / "descripcion_shopify.txt").exists()
+                web_ok  = any((output_dir / f"{nombre}_{c}_web_lateral.jpg").exists()
+                              for c in colores_todos)
+                if desc_ok and web_ok:
+                    try:
+                        crear_en_shopify(nombre, producto_dir, colores_todos, precio_shopify, output_dir)
+                    except RuntimeError as e:
+                        print(f"  Shopify ERROR: {e}")
+                        _telegram_error(nombre, f"Shopify: {e}")
+
+            if historia_path and historia_path.exists():
+                enviar_imagen_telegram(historia_path, f"✅ {nombre} publicado en Shopify")
+
+        (producto_dir / "PROCESAR.txt").unlink(missing_ok=True)
+        print(f"\n{nombre} completado!")
+        return
 
     elif campos_info and descripcion_existe:
         print("  Regenerando descripcion (info actualizada)...")
@@ -1199,21 +1373,8 @@ def procesar_producto(producto_dir):
     if tiene_precio:
         _actualizar_precio(producto_dir, procesar_data["precio"])
 
-    precio_shopify = procesar_data.get("precio", "0")
-
-    # DESACTIVADO TEMPORALMENTE — requiere autorización Telegram
-    # desc_ok = (producto_dir / "descripcion_shopify.txt").exists()
-    # web_ok  = any((output_dir / f"{nombre}_{c}_web_lateral.jpg").exists() for c in colores_todos)
-    # if desc_ok and web_ok and SHOPIFY_TOKEN:
-    #     try:
-    #         crear_en_shopify(nombre, producto_dir, colores_todos, precio_shopify, output_dir)
-    #     except RuntimeError as e:
-    #         print(f"  Shopify ERROR: {e}")
-    #         _telegram_error(nombre, f"Shopify: {e}")
-
     (producto_dir / "PROCESAR.txt").unlink(missing_ok=True)
     print(f"\n{nombre} completado!")
-    _enviar_notificacion_telegram(nombre, producto_dir, precio_shopify, colores_todos, tallas=procesar_data.get("tallas", ""))
 
 
 # ── Entrypoint ────────────────────────────────────────────────────────────────
