@@ -589,6 +589,10 @@ def generar_historia(nombre, output_dir):
     HISTORIA_W      = 1080
     HISTORIA_H      = 1920
     HISTORIA_HEADER = 200
+    output = output_dir / f"{nombre}_historia.jpg"
+    if output.exists():
+        print(f"  Historia: ya existe, saltando")
+        return output
     patron = re.compile(rf'^{re.escape(nombre)}_([A-Za-z][A-Za-z0-9_]*)_web_lateral\.jpg$', re.IGNORECASE)
     por_color = {}
     for f in sorted(output_dir.iterdir()):
@@ -1282,9 +1286,20 @@ def procesar_producto(producto_dir):
     info_completa      = all(k in leer_info_txt(producto_dir) for k in INFO_FIELDS)
     hay_faltantes      = bool(faltantes)
 
+    historia_path_chk = output_dir / f"{nombre}_historia.jpg"
+    fase2_pendiente   = (
+        not hay_faltantes
+        and not historia_path_chk.exists()
+        and (producto_dir / "prompt_nanobanana.txt").exists()
+        and (producto_dir / "prompt_nanobanana_close.txt").exists()
+        and any(output_dir.glob(f"{nombre}_*_close.jpg"))
+    )
+
     print(f"  Colores disponibles: {colores_todos}")
     if colores_nuevos:
         print(f"  Colores sin imagenes: {colores_nuevos}")
+    if fase2_pendiente:
+        print(f"  FASE 2 pendiente: _close existe, historia no")
 
     if hay_faltantes:
         # ── Prompts: una sola llamada Claude Vision para ambos ───────────────
@@ -1332,6 +1347,52 @@ def procesar_producto(producto_dir):
         if respuesta == "SI":
             # ── FASE 2 ───────────────────────────────────────────────────────
 
+            print("\n  FASE 2 — Generando escena completa (9:16)...")
+            for color, numero, archivo in archivos:
+                print(f"\n  --- Escena {color}_{numero} ---")
+                zapato_img  = PIL.Image.open(archivo)
+                nombre_base = f"{nombre}_{color}_{numero}"
+                _generar_variante(prompt, zapato_img, archivo, output_dir, nombre_base, "")
+
+            generar_web(nombre, producto_dir, output_dir)
+
+            historia_path = generar_historia(nombre, output_dir)
+
+            generar_descripcion_shopify(nombre, referencia, colores_todos, producto_dir,
+                                        precio=procesar_data.get("precio", "N/D"))
+
+            precio_shopify = procesar_data.get("precio", "0")
+            if SHOPIFY_TOKEN:
+                desc_ok = (producto_dir / "descripcion_shopify.txt").exists()
+                web_ok  = any((output_dir / f"{nombre}_{c}_web_lateral.jpg").exists()
+                              for c in colores_todos)
+                if desc_ok and web_ok:
+                    try:
+                        crear_en_shopify(nombre, producto_dir, colores_todos, precio_shopify, output_dir)
+                    except RuntimeError as e:
+                        print(f"  Shopify ERROR: {e}")
+                        _telegram_error(nombre, f"Shopify: {e}")
+
+            if historia_path and historia_path.exists():
+                enviar_imagen_telegram(historia_path, f"✅ {nombre} publicado en Shopify")
+
+        (producto_dir / "PROCESAR.txt").unlink(missing_ok=True)
+        print(f"\n{nombre} completado!")
+        return
+
+    elif fase2_pendiente:
+        print("  FASE 2 pendiente — _close y prompts ya existen")
+        prompt = open(producto_dir / "prompt_nanobanana.txt", encoding="utf-8").read()
+
+        _telegram_send(
+            f"⏸ *{nombre}* — FASE 1 ya completada.\n\n"
+            f"¿Continuar con FASE 2 (escena completa, imágenes web e historia IG)?\n\n"
+            f"Responde *SI* para continuar o *NO* para cancelar.\n"
+            f"⏱ Timeout: 30 minutos"
+        )
+        respuesta = esperar_respuesta_telegram(timeout=1800)
+
+        if respuesta == "SI":
             print("\n  FASE 2 — Generando escena completa (9:16)...")
             for color, numero, archivo in archivos:
                 print(f"\n  --- Escena {color}_{numero} ---")
