@@ -876,15 +876,18 @@ def generar_descripcion_shopify(nombre, referencia_path, colores, producto_dir, 
 
 
 # ── Telegram ──────────────────────────────────────────────────────────────────
-def _telegram_send(texto):
+def _telegram_send(texto, parse_mode=None):
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT:
         return
-    url  = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    body = json.dumps({"chat_id": TELEGRAM_CHAT, "text": texto}).encode("utf-8")
+    url     = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    payload = {"chat_id": TELEGRAM_CHAT, "text": texto}
+    if parse_mode:
+        payload["parse_mode"] = parse_mode
+    body = json.dumps(payload).encode("utf-8")
     req  = urllib.request.Request(url, data=body, method="POST",
                                   headers={"Content-Type": "application/json"})
     try:
-        with urllib.request.urlopen(req) as r:
+        with urllib.request.urlopen(req, timeout=10) as r:
             r.read()
     except Exception as e:
         print(f"  Telegram: fallo al enviar: {e}")
@@ -1365,11 +1368,15 @@ def procesar_producto(producto_dir):
                                       colores_todos, tallas=procesar_data.get("tallas", ""))
 
         # ── PAUSA: esperar SI/NO (30 min) ────────────────────────────────────
+        _patron_cnt = re.compile(
+            rf'^{re.escape(nombre)}_[A-Za-z][A-Za-z0-9_]*_\d+_close(?:_REVISAR)?\.jpg$', re.IGNORECASE)
+        _n_close = sum(1 for f in output_dir.iterdir() if _patron_cnt.match(f.name))
         _telegram_send(
-            f"👆 *{nombre}* — ¿Continuar con FASE 2?\n\n"
-            f"Responde *SI* para generar escena completa, imágenes web e historia IG.\n"
-            f"Responde *NO* para cancelar.\n\n"
-            f"⏱ Timeout: 30 minutos"
+            f"✅ FASE 1 completa — {nombre}\n"
+            f"Se generaron {_n_close} imágenes _close\n\n"
+            f"¿Continuar con escena completa + fondo blanco + Shopify?\n"
+            f"Responde *SI* para continuar o *NO* para cancelar.",
+            parse_mode="Markdown"
         )
         respuesta = esperar_respuesta_telegram(timeout=1800)
 
@@ -1405,6 +1412,9 @@ def procesar_producto(producto_dir):
             if historia_path and historia_path.exists():
                 enviar_imagen_telegram(historia_path, f"✅ {nombre} publicado en Shopify")
 
+        else:
+            _telegram_send(f"Proceso cancelado para {nombre}")
+
         (producto_dir / "PROCESAR.txt").unlink(missing_ok=True)
         print(f"\n{nombre} completado!")
         return
@@ -1414,10 +1424,11 @@ def procesar_producto(producto_dir):
         prompt = open(producto_dir / "prompt_nanobanana.txt", encoding="utf-8").read()
 
         _telegram_send(
-            f"⏸ *{nombre}* — FASE 1 ya completada.\n\n"
-            f"¿Continuar con FASE 2 (escena completa, imágenes web e historia IG)?\n\n"
-            f"Responde *SI* para continuar o *NO* para cancelar.\n"
-            f"⏱ Timeout: 30 minutos"
+            f"✅ FASE 1 completa — {nombre}\n"
+            f"Las imágenes _close ya existen.\n\n"
+            f"¿Continuar con escena completa + fondo blanco + Shopify?\n"
+            f"Responde *SI* para continuar o *NO* para cancelar.",
+            parse_mode="Markdown"
         )
         respuesta = esperar_respuesta_telegram(timeout=1800)
 
@@ -1450,6 +1461,9 @@ def procesar_producto(producto_dir):
 
             if historia_path and historia_path.exists():
                 enviar_imagen_telegram(historia_path, f"✅ {nombre} publicado en Shopify")
+
+        else:
+            _telegram_send(f"Proceso cancelado para {nombre}")
 
         (producto_dir / "PROCESAR.txt").unlink(missing_ok=True)
         print(f"\n{nombre} completado!")

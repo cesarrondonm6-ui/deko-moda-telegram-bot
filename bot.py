@@ -422,7 +422,7 @@ def _run_pipeline(nombre: str, carpeta: str, chat_id: str, token: str) -> None:
             [sys.executable, str(PIPELINE_SCRIPT), nombre],
             capture_output=True,
             text=True,
-            timeout=600,
+            timeout=3600,
         )
         if proc.stdout:
             logger.info("Pipeline stdout [%s]:\n%s", nombre, proc.stdout[:2000])
@@ -433,7 +433,7 @@ def _run_pipeline(nombre: str, carpeta: str, chat_id: str, token: str) -> None:
                 f"❌ Error en pipeline {nombre}:\n{proc.stderr[-500:]}")
     except subprocess.TimeoutExpired:
         _telegram_send(token, chat_id,
-            f"⚠️ Pipeline {nombre} excedió 30 minutos. Revisar manualmente.")
+            f"⚠️ Pipeline {nombre} excedió 60 minutos. Revisar manualmente.")
 
 
 async def confirmar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
