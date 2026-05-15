@@ -123,13 +123,15 @@ Estructura de respuesta:
   "sugerencias": ["sugerencias opcionales de mejora"]
 }}
 
-Reglas de validación:
-- precio: número positivo (sin símbolo de moneda)
-- altura_suela: incluye unidad cm o mm (ej: 3cm)
-- plantilla_confort y cordon: si | no
-- ocasion: casual | formal | deportivo | elegante | trabajo
-- todos los campos son obligatorios y no vacíos
+Reglas de validación (sé permisivo con el formato, solo rechaza si el valor es claramente inválido):
+- precio: número positivo (sin símbolo de moneda). ACEPTA cualquier número entero.
+- altura_suela: debe tener un número con unidad (cm o mm). ACEPTA "3cm", "3 cm", "3.5cm".
+- plantilla_confort y cordon: si | no (en cualquier capitalización). ACEPTA "Si", "SI", "No", "NO".
+- ocasion: cualquier texto descriptivo de ocasión de uso es válido (formal, casual, deportivo, etc.)
+- tipo_calzado: cualquier descripción de tipo de calzado es válida
+- todos los campos deben ser no vacíos
 - NO valides el campo tallas: ya fue validado antes de llamarte
+- En caso de duda, marca valido: true con sugerencias en lugar de errores
 
 Datos a validar:
 {datos_str}"""
@@ -252,6 +254,16 @@ async def recibir_datos(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
             + "\n\nReenvía el bloque completo."
         )
         return DATOS
+
+    # Normalización básica antes de validar
+    if "ocasion" in datos:
+        datos["ocasion"] = datos["ocasion"].lower().strip()
+    if "plantilla_confort" in datos:
+        datos["plantilla_confort"] = datos["plantilla_confort"].lower().strip()
+    if "cordon" in datos:
+        datos["cordon"] = datos["cordon"].lower().strip()
+    if "altura_suela" in datos:
+        datos["altura_suela"] = re.sub(r'\s+', '', datos["altura_suela"])
 
     # Validación local de tallas (Python) — no delegada a Claude
     tallas_val = datos.get("tallas", "")
