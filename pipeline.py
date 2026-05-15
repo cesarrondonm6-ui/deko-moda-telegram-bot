@@ -1276,6 +1276,8 @@ def procesar_producto(producto_dir):
     print(f"PROCESANDO: {nombre}")
     print("=" * 70)
 
+    _telegram_send(f"🔄 Pipeline iniciado correctamente para {nombre}")
+
     procesar_data = leer_procesar_txt(producto_dir)
     campos_info   = {k: v for k, v in procesar_data.items() if k in INFO_FIELDS}
     tiene_precio  = "precio" in procesar_data
@@ -1499,7 +1501,11 @@ if __name__ == "__main__":
         if not (producto_dir / "PROCESAR.txt").exists():
             print(f"ERROR: PROCESAR.txt no encontrado en {producto_dir}")
             sys.exit(1)
-        procesar_producto(producto_dir)
+        try:
+            procesar_producto(producto_dir)
+        except Exception as e:
+            import traceback
+            _telegram_send(f"❌ Error en pipeline {nombre_arg}:\n{traceback.format_exc()[-1000:]}")
     else:
         # Modo monitor: escanea continuamente
         print("=" * 70)
