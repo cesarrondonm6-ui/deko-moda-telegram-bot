@@ -534,6 +534,50 @@ def _shopify_api(method, endpoint, data=None):
         raise RuntimeError(f"HTTP {e.code}: {e.read().decode()}")
 
 
+def _shopify_buscar_productos(nombre_upper):
+    """Devuelve lista de productos cuyo título es nombre o empieza con 'nombre - '."""
+    try:
+        r = _shopify_api("GET", f"products.json?limit=250&fields=id,title,status")
+    except RuntimeError:
+        return []
+    return [
+        p for p in r.get("products", [])
+        if p["title"].upper() == nombre_upper
+        or p["title"].upper().startswith(nombre_upper + " - ")
+    ]
+
+
+def _shopify_escribir_metafields(product_id, fecha_pub, dias_activo, activo=True):
+    """Crea o actualiza los metafields deko/fecha_pub, dias_activo, activo."""
+    try:
+        r = _shopify_api("GET", f"products/{product_id}/metafields.json?namespace=deko")
+        existentes = {m["key"]: m for m in r.get("metafields", [])}
+    except RuntimeError:
+        existentes = {}
+
+    updates = {
+        "fecha_pub":   (fecha_pub, "single_line_text_field"),
+        "dias_activo": (str(dias_activo), "number_integer"),
+        "activo":      ("true" if activo else "false", "single_line_text_field"),
+    }
+    for key, (value, type_) in updates.items():
+        if key in existentes:
+            mf_id = existentes[key]["id"]
+            try:
+                _shopify_api("PUT", f"metafields/{mf_id}.json",
+                             {"metafield": {"id": mf_id, "value": value, "type": type_}})
+            except RuntimeError:
+                pass
+        else:
+            try:
+                _shopify_api("POST", f"products/{product_id}/metafields.json", {
+                    "metafield": {"namespace": "deko", "key": key,
+                                  "value": value, "type": type_}
+                })
+            except RuntimeError:
+                pass
+
+
 async def cmd_reactivar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     from datetime import date, timedelta
     args = context.args or []
@@ -552,35 +596,25 @@ async def cmd_reactivar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await update.message.reply_text("DIAS debe ser un número entero positivo.")
         return
 
-    ids_path = PRODUCTOS_DIR / nombre / "shopify_ids.json"
-    if not ids_path.exists():
-        await update.message.reply_text(
-            f"No encontré shopify_ids.json para {nombre}.\n"
-            f"Ruta buscada: {ids_path}"
-        )
-        return
-
-    try:
-        ids = json.loads(ids_path.read_text(encoding="utf-8"))
-    except Exception as e:
-        await update.message.reply_text(f"Error leyendo shopify_ids.json: {e}")
-        return
-
     if not SHOPIFY_TOKEN or not SHOPIFY_SHOP:
         await update.message.reply_text("SHOPIFY_TOKEN o SHOPIFY_SHOP no configurados.")
         return
 
-    maestro_id   = ids.get("maestro")
-    individuales = ids.get("individuales", {})
-    todos_ids    = ([maestro_id] if maestro_id else []) + list(individuales.values())
+    productos = _shopify_buscar_productos(nombre)
+    if not productos:
+        await update.message.reply_text(
+            f"No encontré productos en Shopify para '{nombre}'.\n"
+            f"Verifica que el nombre sea exacto (ej: ALMA, Salome)."
+        )
+        return
 
     errores = []
-    for pid in todos_ids:
+    for p in productos:
         try:
-            _shopify_api("PUT", f"products/{pid}.json",
-                         {"product": {"id": pid, "status": "active"}})
+            _shopify_api("PUT", f"products/{p['id']}.json",
+                         {"product": {"id": p["id"], "status": "active"}})
         except RuntimeError as e:
-            errores.append(f"{pid}: {e}")
+            errores.append(f"{p['title']}: {e}")
 
     if errores:
         await update.message.reply_text(
@@ -590,13 +624,13 @@ async def cmd_reactivar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
     hoy        = date.today()
     fecha_venc = hoy + timedelta(days=dias)
-    ids["activo"]            = True
-    ids["fecha_publicacion"] = hoy.isoformat()
-    ids["dias_activo"]       = dias
-    ids_path.write_text(json.dumps(ids, indent=2), encoding="utf-8")
+
+    # Guarda metafields en todos los productos para que vigilancia pueda rastrearlos
+    for p in productos:
+        _shopify_escribir_metafields(p["id"], hoy.isoformat(), dias, activo=True)
 
     await update.message.reply_text(
-        f"✅ {nombre} reactivado por {dias} días.\n"
+        f"✅ {nombre} reactivado por {dias} días ({len(productos)} productos).\n"
         f"Se desactivará el {fecha_venc.strftime('%d/%m/%Y')}."
     )
 
