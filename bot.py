@@ -38,6 +38,7 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 CHAT_ID = os.getenv("CHAT_ID")
 SHOPIFY_TOKEN = os.getenv("SHOPIFY_TOKEN")
+SHOPIFY_SHOP  = os.getenv("SHOPIFY_SHOP", "")
 
 # Validación con logs para debugging
 if not BOT_TOKEN:
@@ -519,6 +520,87 @@ async def cmd_cancelar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     return ConversationHandler.END
 
 
+def _shopify_api(method, endpoint, data=None):
+    url  = f"https://{SHOPIFY_SHOP}.myshopify.com/admin/api/2024-01/{endpoint}"
+    body = json.dumps(data).encode() if data else None
+    req  = urllib.request.Request(url, data=body, method=method, headers={
+        "X-Shopify-Access-Token": SHOPIFY_TOKEN,
+        "Content-Type": "application/json",
+    })
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            return json.loads(r.read())
+    except urllib.error.HTTPError as e:
+        raise RuntimeError(f"HTTP {e.code}: {e.read().decode()}")
+
+
+async def cmd_reactivar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    from datetime import date, timedelta
+    args = context.args or []
+    if len(args) < 2:
+        await update.message.reply_text(
+            "Uso: /reactivar NOMBRE DIAS\nEjemplo: /reactivar ALMA 10"
+        )
+        return
+
+    nombre = args[0].upper()
+    try:
+        dias = int(args[1])
+        if dias < 1:
+            raise ValueError()
+    except ValueError:
+        await update.message.reply_text("DIAS debe ser un número entero positivo.")
+        return
+
+    ids_path = PRODUCTOS_DIR / nombre / "shopify_ids.json"
+    if not ids_path.exists():
+        await update.message.reply_text(
+            f"No encontré shopify_ids.json para {nombre}.\n"
+            f"Ruta buscada: {ids_path}"
+        )
+        return
+
+    try:
+        ids = json.loads(ids_path.read_text(encoding="utf-8"))
+    except Exception as e:
+        await update.message.reply_text(f"Error leyendo shopify_ids.json: {e}")
+        return
+
+    if not SHOPIFY_TOKEN or not SHOPIFY_SHOP:
+        await update.message.reply_text("SHOPIFY_TOKEN o SHOPIFY_SHOP no configurados.")
+        return
+
+    maestro_id   = ids.get("maestro")
+    individuales = ids.get("individuales", {})
+    todos_ids    = ([maestro_id] if maestro_id else []) + list(individuales.values())
+
+    errores = []
+    for pid in todos_ids:
+        try:
+            _shopify_api("PUT", f"products/{pid}.json",
+                         {"product": {"id": pid, "status": "active"}})
+        except RuntimeError as e:
+            errores.append(f"{pid}: {e}")
+
+    if errores:
+        await update.message.reply_text(
+            f"Errores al reactivar {nombre}:\n" + "\n".join(errores)
+        )
+        return
+
+    hoy        = date.today()
+    fecha_venc = hoy + timedelta(days=dias)
+    ids["activo"]            = True
+    ids["fecha_publicacion"] = hoy.isoformat()
+    ids["dias_activo"]       = dias
+    ids_path.write_text(json.dumps(ids, indent=2), encoding="utf-8")
+
+    await update.message.reply_text(
+        f"✅ {nombre} reactivado por {dias} días.\n"
+        f"Se desactivará el {fecha_venc.strftime('%d/%m/%Y')}."
+    )
+
+
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     logger.error("Error no controlado:", exc_info=context.error)
     if isinstance(update, Update) and update.effective_message:
@@ -562,6 +644,7 @@ def main() -> None:
     )
 
     app.add_handler(conv)
+    app.add_handler(CommandHandler("reactivar", cmd_reactivar))
     app.add_error_handler(error_handler)
 
     port = int(os.getenv("PORT", "8000"))
