@@ -1293,14 +1293,22 @@ def crear_en_shopify(nombre, producto_dir, colores, precio, output_dir):
             except RuntimeError as e:
                 print(f"    [{color}] ERROR {img.name}: {e}")
 
-    # Collage al final — solo maestro, sin variante
+    # Collage al final — individuales + maestro con todos los variant_ids
     collage = output_dir / f"{nombre}_collage.jpg"
     if collage.exists():
+        for color, cid in ids["individuales"].items():
+            try:
+                _shopify_subir_imagen(cid, collage, alt=f"{nombre} collage")
+                print(f"  Collage subido a [{color}] individual OK")
+            except RuntimeError as e:
+                print(f"  ERROR collage [{color}] individual: {e}")
+        all_vids = [vid for vids in variantes_por_color.values() for vid in vids]
         try:
-            _shopify_subir_imagen(maestro_id, collage, alt=f"{nombre} collage")
+            _shopify_subir_imagen(maestro_id, collage, alt=f"{nombre} collage",
+                                  variant_ids=all_vids if all_vids else None)
             print(f"  Collage subido al maestro OK")
         except RuntimeError as e:
-            print(f"  ERROR collage: {e}")
+            print(f"  ERROR collage maestro: {e}")
 
     ids_path.write_text(json.dumps(ids, indent=2), encoding="utf-8")
     print(f"  Shopify: IDs guardados — maestro {maestro_id}")
