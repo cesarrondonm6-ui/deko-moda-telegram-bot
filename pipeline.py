@@ -1248,20 +1248,40 @@ def crear_en_shopify(nombre, producto_dir, colores, precio, output_dir):
 
     print("  Shopify: subiendo imagenes...")
     for color in colores:
-        img = output_dir / f"{nombre}_{color}_web_lateral.jpg"
-        if not img.exists():
-            print(f"    [{color}] imagen no encontrada, saltando")
-            continue
         alt_txt = f"{nombre} {color.capitalize()}"
+        ind_id  = ids["individuales"].get(color)
+        vids    = variantes_por_color.get(color.upper(), [])
+
+        # Orden: web_lateral, web_diagonal, close, cuerpo completo — todos con variant_ids
+        imagenes_color = []
+        for sufijo in ("_web_lateral", "_web_diagonal"):
+            p = output_dir / f"{nombre}_{color}{sufijo}.jpg"
+            if p.exists():
+                imagenes_color.append(p)
+        for f in sorted(output_dir.iterdir()):
+            if re.match(rf'^{re.escape(nombre)}_{re.escape(color)}_\d+_close\.jpg$', f.name, re.IGNORECASE):
+                imagenes_color.append(f)
+        for f in sorted(output_dir.iterdir()):
+            if re.match(rf'^{re.escape(nombre)}_{re.escape(color)}_\d+\.jpg$', f.name, re.IGNORECASE):
+                imagenes_color.append(f)
+
+        for img in imagenes_color:
+            try:
+                if ind_id:
+                    _shopify_subir_imagen(ind_id, img, alt=f"{alt_txt} — {img.stem}", variant_ids=None)
+                _shopify_subir_imagen(maestro_id, img, alt=f"{alt_txt} — {img.stem}", variant_ids=vids)
+                print(f"    [{color}] {img.name} OK")
+            except RuntimeError as e:
+                print(f"    [{color}] ERROR {img.name}: {e}")
+
+    # Collage al final — solo maestro, sin variante
+    collage = output_dir / f"{nombre}_collage.jpg"
+    if collage.exists():
         try:
-            ind_id = ids["individuales"].get(color)
-            if ind_id:
-                _shopify_subir_imagen(ind_id, img, alt=alt_txt)
-            vids = variantes_por_color.get(color, [])
-            _shopify_subir_imagen(maestro_id, img, alt=alt_txt, variant_ids=vids)
-            print(f"    [{color}] imagenes subidas")
+            _shopify_subir_imagen(maestro_id, collage, alt=f"{nombre} collage")
+            print(f"  Collage subido al maestro OK")
         except RuntimeError as e:
-            print(f"    [{color}] ERROR imagen: {e}")
+            print(f"  ERROR collage: {e}")
 
     ids_path.write_text(json.dumps(ids, indent=2), encoding="utf-8")
     print(f"  Shopify: IDs guardados — maestro {maestro_id}")
