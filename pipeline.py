@@ -1202,6 +1202,20 @@ def _shopify_subir_imagen(product_id, img_path, alt="", variant_ids=None):
         payload["image"]["variant_ids"] = variant_ids
     return _shopify_request("POST", f"products/{product_id}/images.json", payload)["image"]["id"]
 
+
+def _shopify_borrar_imagenes(product_id):
+    """Elimina todas las imágenes existentes de un producto para evitar duplicados."""
+    try:
+        r = _shopify_request("GET", f"products/{product_id}/images.json?fields=id")
+        for img in r.get("images", []):
+            try:
+                _shopify_request("DELETE", f"products/{product_id}/images/{img['id']}.json")
+            except RuntimeError as e:
+                print(f"    [WARN] No se pudo borrar imagen {img['id']}: {e}")
+        print(f"  {product_id}: {len(r.get('images', []))} imagenes eliminadas")
+    except RuntimeError as e:
+        print(f"  [WARN] No se pudieron listar imagenes de {product_id}: {e}")
+
 def crear_en_shopify(nombre, producto_dir, colores, precio, output_dir):
     ids_path = producto_dir / "shopify_ids.json"
     if ids_path.exists():
@@ -1245,6 +1259,11 @@ def crear_en_shopify(nombre, producto_dir, colores, precio, output_dir):
         pid = res["product"]["id"]
         ids["individuales"][color] = pid
         print(f"    [{color}] ID {pid}")
+
+    print("  Shopify: borrando imagenes existentes...")
+    _shopify_borrar_imagenes(maestro_id)
+    for ind_id_del in ids["individuales"].values():
+        _shopify_borrar_imagenes(ind_id_del)
 
     print("  Shopify: subiendo imagenes...")
     for color in colores:
