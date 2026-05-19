@@ -1260,6 +1260,43 @@ def _shopify_subir_imagen(product_id, img_path, alt="", variant_ids=None):
     return _shopify_request("POST", f"products/{product_id}/images.json", payload)["image"]["id"]
 
 
+def _md_to_html(md: str) -> str:
+    """Convierte markdown básico a HTML para body_html de Shopify."""
+    import html as _html
+    lines = md.split("\n")
+    out   = []
+    in_ul = False
+    for line in lines:
+        if line.startswith("### "):
+            if in_ul: out.append("</ul>"); in_ul = False
+            out.append(f"<h3>{_inline_md(_html.escape(line[4:]))}</h3>")
+        elif line.startswith("## "):
+            if in_ul: out.append("</ul>"); in_ul = False
+            out.append(f"<h2>{_inline_md(_html.escape(line[3:]))}</h2>")
+        elif line.startswith("# "):
+            if in_ul: out.append("</ul>"); in_ul = False
+            out.append(f"<h1>{_inline_md(_html.escape(line[2:]))}</h1>")
+        elif line.startswith("- ") or line.startswith("* "):
+            if not in_ul: out.append("<ul>"); in_ul = True
+            out.append(f"<li>{_inline_md(_html.escape(line[2:]))}</li>")
+        elif line.strip() == "":
+            if in_ul: out.append("</ul>"); in_ul = False
+        else:
+            if in_ul: out.append("</ul>"); in_ul = False
+            out.append(f"<p>{_inline_md(_html.escape(line))}</p>")
+    if in_ul:
+        out.append("</ul>")
+    return "\n".join(out)
+
+
+def _inline_md(text: str) -> str:
+    """Bold y italic en línea: **bold** → <strong>, *italic* → <em>."""
+    import re as _re
+    text = _re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', text)
+    text = _re.sub(r'\*(.+?)\*',     r'<em>\1</em>',         text)
+    return text
+
+
 def _shopify_borrar_imagenes(product_id):
     """Elimina todas las imágenes existentes de un producto para evitar duplicados."""
     try:
@@ -1279,8 +1316,12 @@ def crear_en_shopify(nombre, producto_dir, colores, precio, output_dir):
         print("  Shopify: ya publicado, saltando")
         return
     desc_raw = open(producto_dir / "descripcion_shopify.txt", encoding="utf-8").read()
-    m    = re.search(r'DESCRIPCION HTML:\n(.+?)(?:\n\n|\nCARACTERISTICAS:)', desc_raw, re.DOTALL)
-    html = m.group(1).strip() if m else ""
+    m_html   = re.search(
+        r'DESCRIPCION(?:\s+HTML)?:\n(.+?)(?=\nDETALLES TECNICOS:|\nCARACTERISTICAS:|\Z)',
+        desc_raw, re.DOTALL | re.IGNORECASE
+    )
+    raw_desc = m_html.group(1).strip() if m_html else ""
+    html     = _md_to_html(raw_desc) if raw_desc and not raw_desc.strip().startswith('<') else raw_desc
     ids  = {"maestro": None, "individuales": {}}
 
     print("  Shopify: creando producto maestro...")
