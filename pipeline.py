@@ -671,28 +671,85 @@ def generar_historia(nombre, output_dir):
 def _post_procesar_web(img_bytes):
     img = PIL.Image.open(BytesIO(img_bytes)).convert("RGB")
     w, h = img.size
-    pixels = img.load()
-    corners = [pixels[0,0], pixels[w-1,0], pixels[0,h-1], pixels[w-1,h-1]]
-    bg_r = sum(c[0] for c in corners) // 4
-    bg_g = sum(c[1] for c in corners) // 4
-    bg_b = sum(c[2] for c in corners) // 4
-    diff = PIL.ImageChops.difference(img, PIL.Image.new("RGB", (w, h), (bg_r, bg_g, bg_b)))
+
+    # Mediana del borde (robusto a artefactos de esquina)
+    step_x = max(1, (w - 10) // 10)
+    step_y = max(1, (h - 10) // 10)
+    border = []
+    for x in range(5, w - 5, step_x):
+        border.append(img.getpixel((x, 0)))
+        border.append(img.getpixel((x, h - 1)))
+    for y in range(5, h - 5, step_y):
+        border.append(img.getpixel((0, y)))
+        border.append(img.getpixel((w - 1, y)))
+    if border:
+        border_r = sorted(p[0] for p in border)
+        border_g = sorted(p[1] for p in border)
+        border_b = sorted(p[2] for p in border)
+        mid = len(border) // 2
+        bg_r, bg_g, bg_b = border_r[mid], border_g[mid], border_b[mid]
+    else:
+        bg_r = bg_g = bg_b = 255
+    if bg_r > 200 and bg_g > 200 and bg_b > 200:
+        bg_r = bg_g = bg_b = 255
+
+    bg_img   = PIL.Image.new("RGB", (w, h), (bg_r, bg_g, bg_b))
+    diff     = PIL.ImageChops.difference(img, bg_img)
     dr, dg, db = diff.split()
     max_diff = PIL.ImageChops.lighter(PIL.ImageChops.lighter(dr, dg), db)
-    mask = max_diff.point(lambda x: 255 if x > 20 else 0)
-    bbox = mask.getbbox()
-    if bbox is None:
+    mask     = max_diff.point(lambda x: 255 if x > 22 else 0)
+    mask     = mask.filter(PIL.ImageFilter.MinFilter(size=5)).filter(PIL.ImageFilter.MaxFilter(size=5))
+
+    if mask.getbbox() is None:
         return img_bytes
+
+    # Filtro anti-artefactos de esquina: excluye filas/columnas con muy pocos pixels
+    _STEP   = 4
+    _MIN_PX = 20
+    _pix    = mask.load()
+    _xs     = list(range(0, w, _STEP))
+    _ys     = list(range(0, h, _STEP))
+    _row_ok = [sum(1 for x in _xs if _pix[x, y] > 0) >= _MIN_PX for y in _ys]
+    _col_ok = [sum(1 for y in _ys if _pix[x, y] > 0) >= _MIN_PX for x in _xs]
+    _valid_ys = [y for y, ok in zip(_ys, _row_ok) if ok]
+    _valid_xs = [x for x, ok in zip(_xs, _col_ok) if ok]
+    if _valid_ys and _valid_xs:
+        bbox = (min(_valid_xs), min(_valid_ys),
+                max(_valid_xs) + _STEP, max(_valid_ys) + _STEP)
+    else:
+        bbox = mask.getbbox()
+
+    pad  = 8
+    bbox = (max(0, bbox[0] - pad), max(0, bbox[1] - pad),
+            min(w, bbox[2] + pad), min(h, bbox[3] + pad))
+
     cropped = img.crop(bbox)
     cw, ch  = cropped.size
     canvas_size = 1000
-    margin      = int(canvas_size * 0.10)
+    margin      = int(canvas_size * 0.08)
     max_dim     = canvas_size - 2 * margin
     scale       = min(max_dim / cw, max_dim / ch)
     new_w, new_h = round(cw * scale), round(ch * scale)
-    shoe   = cropped.resize((new_w, new_h), PIL.Image.LANCZOS)
+    shoe = cropped.resize((new_w, new_h), PIL.Image.LANCZOS)
+
+    # Centrado por centroide Y: alinea la masa visual al centro del canvas
+    mask_crop = mask.crop(bbox)
+    mc_pix    = mask_crop.load()
+    mc_w, mc_h = mask_crop.size
+    sum_y = cnt = 0
+    for y in range(0, mc_h, 4):
+        for x in range(0, mc_w, 4):
+            if mc_pix[x, y] > 0:
+                sum_y += y
+                cnt   += 1
+    if cnt > 0:
+        centroid_y_shoe = (sum_y / cnt) * scale
+        paste_y = max(0, min(canvas_size - new_h, int(canvas_size / 2 - centroid_y_shoe)))
+    else:
+        paste_y = (canvas_size - new_h) // 2
+
     canvas = PIL.Image.new("RGB", (canvas_size, canvas_size), (255, 255, 255))
-    canvas.paste(shoe, ((canvas_size - new_w) // 2, (canvas_size - new_h) // 2))
+    canvas.paste(shoe, ((canvas_size - new_w) // 2, paste_y))
     buf = BytesIO()
     canvas.save(buf, "JPEG", quality=95)
     return buf.getvalue()
