@@ -1328,7 +1328,8 @@ def crear_en_shopify(nombre, producto_dir, colores, precio, output_dir):
         ind_id  = ids["individuales"].get(color)
         vids    = variantes_por_color.get(color.upper(), [])
 
-        # Orden: web_lateral, web_diagonal, close, cuerpo completo — todos con variant_ids
+        # Orden: web_lateral (variant_ids), web_diagonal, close, cuerpo — los demás sin variant_ids
+        lateral_name   = f"{nombre}_{color}_web_lateral.jpg".lower()
         imagenes_color = []
         for sufijo in ("_web_lateral", "_web_diagonal"):
             p = output_dir / f"{nombre}_{color}{sufijo}.jpg"
@@ -1342,10 +1343,11 @@ def crear_en_shopify(nombre, producto_dir, colores, precio, output_dir):
                 imagenes_color.append(f)
 
         for img in imagenes_color:
+            img_vids = vids if img.name.lower() == lateral_name else None
             try:
                 if ind_id:
                     _shopify_subir_imagen(ind_id, img, alt=f"{alt_txt} — {img.stem}", variant_ids=None)
-                _shopify_subir_imagen(maestro_id, img, alt=f"{alt_txt} — {img.stem}", variant_ids=vids)
+                _shopify_subir_imagen(maestro_id, img, alt=f"{alt_txt} — {img.stem}", variant_ids=img_vids)
                 print(f"    [{color}] {img.name} OK")
             except RuntimeError as e:
                 print(f"    [{color}] ERROR {img.name}: {e}")
