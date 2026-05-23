@@ -697,8 +697,16 @@ def _post_procesar_web(img_bytes):
     diff     = PIL.ImageChops.difference(img, bg_img)
     dr, dg, db = diff.split()
     max_diff = PIL.ImageChops.lighter(PIL.ImageChops.lighter(dr, dg), db)
-    mask     = max_diff.point(lambda x: 255 if x > 22 else 0)
-    mask     = mask.filter(PIL.ImageFilter.MinFilter(size=5)).filter(PIL.ImageFilter.MaxFilter(size=5))
+    mask_diff = max_diff.point(lambda x: 255 if x > 22 else 0)
+
+    # Máscara de bordes: detecta contorno del zapato incluso blanco-sobre-blanco
+    gray      = img.convert("L").filter(PIL.ImageFilter.GaussianBlur(radius=2))
+    edges     = gray.filter(PIL.ImageFilter.FIND_EDGES)
+    mask_edge = edges.point(lambda x: 255 if x > 8 else 0)
+    mask_edge = mask_edge.filter(PIL.ImageFilter.MaxFilter(size=31))
+
+    mask = PIL.ImageChops.lighter(mask_diff, mask_edge)
+    mask = mask.filter(PIL.ImageFilter.MinFilter(size=5)).filter(PIL.ImageFilter.MaxFilter(size=5))
 
     if mask.getbbox() is None:
         return img_bytes
