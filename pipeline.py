@@ -703,19 +703,26 @@ def _post_procesar_web(img_bytes):
     if mask.getbbox() is None:
         return img_bytes
 
-    # Filtro anti-artefactos de esquina: excluye filas/columnas con muy pocos pixels
+    # Filtro anti-artefactos: recorta filas escasas solo desde arriba/abajo
+    # (elimina sombras/artefactos sobre el zapato sin recortar punta ni talon)
     _STEP   = 4
-    _MIN_PX = 20
+    _MIN_PX = 8
     _pix    = mask.load()
     _xs     = list(range(0, w, _STEP))
     _ys     = list(range(0, h, _STEP))
-    _row_ok = [sum(1 for x in _xs if _pix[x, y] > 0) >= _MIN_PX for y in _ys]
-    _col_ok = [sum(1 for y in _ys if _pix[x, y] > 0) >= _MIN_PX for x in _xs]
-    _valid_ys = [y for y, ok in zip(_ys, _row_ok) if ok]
-    _valid_xs = [x for x, ok in zip(_xs, _col_ok) if ok]
-    if _valid_ys and _valid_xs:
-        bbox = (min(_valid_xs), min(_valid_ys),
-                max(_valid_xs) + _STEP, max(_valid_ys) + _STEP)
+    first_row = last_row = None
+    for y in _ys:
+        if sum(1 for x in _xs if _pix[x, y] > 0) >= _MIN_PX:
+            if first_row is None:
+                first_row = y
+            last_row = y
+    if first_row is not None:
+        sub = mask.crop((0, first_row, w, min(h, last_row + _STEP)))
+        sub_bb = sub.getbbox()
+        if sub_bb:
+            bbox = (sub_bb[0], first_row, sub_bb[2], min(h, last_row + _STEP))
+        else:
+            bbox = mask.getbbox()
     else:
         bbox = mask.getbbox()
 
