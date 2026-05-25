@@ -672,7 +672,7 @@ def _post_procesar_web(img_bytes):
     img = PIL.Image.open(BytesIO(img_bytes)).convert("RGB")
     w, h = img.size
 
-    # Mediana del borde (robusto a artefactos de esquina)
+    # Estimar color de fondo desde bordes (mediana robusta)
     step_x = max(1, (w - 10) // 10)
     step_y = max(1, (h - 10) // 10)
     border = []
@@ -693,26 +693,21 @@ def _post_procesar_web(img_bytes):
     if bg_r > 200 and bg_g > 200 and bg_b > 200:
         bg_r = bg_g = bg_b = 255
 
-    bg_img   = PIL.Image.new("RGB", (w, h), (bg_r, bg_g, bg_b))
-    diff     = PIL.ImageChops.difference(img, bg_img)
+    # Máscara de diferencia — umbral bajo (>10) para capturar zapatos blancos sobre fondo blanco
+    bg_img  = PIL.Image.new("RGB", (w, h), (bg_r, bg_g, bg_b))
+    diff    = PIL.ImageChops.difference(img, bg_img)
     dr, dg, db = diff.split()
     max_diff = PIL.ImageChops.lighter(PIL.ImageChops.lighter(dr, dg), db)
-    mask_diff = max_diff.point(lambda x: 255 if x > 22 else 0)
+    mask = max_diff.point(lambda x: 255 if x > 10 else 0)
 
-    # Máscara de bordes: detecta contorno del zapato incluso blanco-sobre-blanco
-    gray      = img.convert("L").filter(PIL.ImageFilter.GaussianBlur(radius=2))
-    edges     = gray.filter(PIL.ImageFilter.FIND_EDGES)
-    mask_edge = edges.point(lambda x: 255 if x > 8 else 0)
-    mask_edge = mask_edge.filter(PIL.ImageFilter.MaxFilter(size=31))
-
-    mask = PIL.ImageChops.lighter(mask_diff, mask_edge)
+    # Apertura morfológica: elimina ruido JPEG aislado (píxeles/manchas < 4px)
     mask = mask.filter(PIL.ImageFilter.MinFilter(size=5)).filter(PIL.ImageFilter.MaxFilter(size=5))
 
     if mask.getbbox() is None:
         return img_bytes
 
-    # Filtro anti-artefactos: recorta filas escasas solo desde arriba/abajo
-    # (elimina sombras/artefactos sobre el zapato sin recortar punta ni talon)
+    # Recorte de filas escasas ANTES de dilatar (evita que artefactos de esquina
+    # expandan hacia el interior y confundan el bbox)
     _STEP   = 4
     _MIN_PX = 8
     _pix    = mask.load()
@@ -724,15 +719,19 @@ def _post_procesar_web(img_bytes):
             if first_row is None:
                 first_row = y
             last_row = y
-    if first_row is not None:
-        sub = mask.crop((0, first_row, w, min(h, last_row + _STEP)))
-        sub_bb = sub.getbbox()
-        if sub_bb:
-            bbox = (sub_bb[0], first_row, sub_bb[2], min(h, last_row + _STEP))
-        else:
-            bbox = mask.getbbox()
+    if first_row is None:
+        first_row, last_row = 0, h - 1
+
+    # Recortar máscara a la banda válida y dilatar para rellenar huecos internos
+    mask = mask.crop((0, first_row, w, min(h, last_row + _STEP)))
+    mask = mask.filter(PIL.ImageFilter.MaxFilter(size=21))
+
+    # Bbox dentro de la banda recortada
+    sub_bb = mask.getbbox()
+    if sub_bb:
+        bbox = (sub_bb[0], first_row, sub_bb[2], first_row + sub_bb[3])
     else:
-        bbox = mask.getbbox()
+        bbox = (0, first_row, w, min(h, last_row + _STEP))
 
     pad  = 8
     bbox = (max(0, bbox[0] - pad), max(0, bbox[1] - pad),
@@ -745,26 +744,10 @@ def _post_procesar_web(img_bytes):
     max_dim     = canvas_size - 2 * margin
     scale       = min(max_dim / cw, max_dim / ch)
     new_w, new_h = round(cw * scale), round(ch * scale)
-    shoe = cropped.resize((new_w, new_h), PIL.Image.LANCZOS)
-
-    # Centrado por centroide Y: alinea la masa visual al centro del canvas
-    mask_crop = mask.crop(bbox)
-    mc_pix    = mask_crop.load()
-    mc_w, mc_h = mask_crop.size
-    sum_y = cnt = 0
-    for y in range(0, mc_h, 4):
-        for x in range(0, mc_w, 4):
-            if mc_pix[x, y] > 0:
-                sum_y += y
-                cnt   += 1
-    if cnt > 0:
-        centroid_y_shoe = (sum_y / cnt) * scale
-        paste_y = max(0, min(canvas_size - new_h, int(canvas_size / 2 - centroid_y_shoe)))
-    else:
-        paste_y = (canvas_size - new_h) // 2
+    shoe   = cropped.resize((new_w, new_h), PIL.Image.LANCZOS)
 
     canvas = PIL.Image.new("RGB", (canvas_size, canvas_size), (255, 255, 255))
-    canvas.paste(shoe, ((canvas_size - new_w) // 2, paste_y))
+    canvas.paste(shoe, ((canvas_size - new_w) // 2, (canvas_size - new_h) // 2))
     buf = BytesIO()
     canvas.save(buf, "JPEG", quality=95)
     return buf.getvalue()
