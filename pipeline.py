@@ -8,9 +8,11 @@ import base64
 import shutil
 import urllib.request
 import urllib.error
+import urllib.parse
 import requests
 from io import BytesIO
 from pathlib import Path
+from datetime import date as _date
 
 import google.genai as genai
 import anthropic
@@ -1235,6 +1237,22 @@ def esperar_respuesta_telegram(timeout=1800):
 
 
 # ── Shopify ───────────────────────────────────────────────────────────────────
+def _parse_tallas(tallas_raw):
+    """'35-40' → ['35'..'40']  |  '35,36,38' → ['35','36','38']"""
+    s = tallas_raw.strip()
+    if "-" in s:
+        partes = s.split("-", 1)
+        try:
+            return [str(t) for t in range(int(partes[0].strip()), int(partes[1].strip()) + 1)]
+        except ValueError:
+            pass
+    if "," in s:
+        return [t.strip() for t in s.split(",") if t.strip().isdigit()]
+    if s.isdigit():
+        return [s]
+    return SHOPIFY_TALLAS
+
+
 def _shopify_request(method, endpoint, payload=None):
     if not SHOPIFY_TOKEN:
         raise RuntimeError("SHOPIFY_TOKEN no configurado")
@@ -1308,11 +1326,61 @@ def _shopify_borrar_imagenes(product_id):
     except RuntimeError as e:
         print(f"  [WARN] No se pudieron listar imagenes de {product_id}: {e}")
 
-def crear_en_shopify(nombre, producto_dir, colores, precio, output_dir):
+
+def _shopify_subir_imagenes_color(product_id, nombre, color, output_dir, alt, variant_ids=None):
+    """Sube en orden: web_lateral (variant_ids), web_diagonal, close (.jpg|.png), cuerpo."""
+    lateral_name = f"{nombre}_{color}_web_lateral.jpg".lower()
+    orden = []
+    for sufijo in ("_web_lateral", "_web_diagonal"):
+        p = output_dir / f"{nombre}_{color}{sufijo}.jpg"
+        if p.exists():
+            orden.append(p)
+    for f in sorted(output_dir.iterdir()):
+        if re.match(rf'^{re.escape(nombre)}_{re.escape(color)}_\d+_close\.(jpg|png)$', f.name, re.IGNORECASE):
+            orden.append(f)
+    for f in sorted(output_dir.iterdir()):
+        if re.match(rf'^{re.escape(nombre)}_{re.escape(color)}_\d+\.jpg$', f.name, re.IGNORECASE):
+            orden.append(f)
+    for img_path in orden:
+        vids = variant_ids if img_path.name.lower() == lateral_name else None
+        try:
+            _shopify_subir_imagen(product_id, img_path, alt=f"{alt} — {img_path.stem}", variant_ids=vids)
+            print(f"    [{color}] {img_path.name} OK")
+        except RuntimeError as e:
+            print(f"    [{color}] ERROR {img_path.name}: {e}")
+
+
+def _shopify_buscar_por_handle(handle):
+    """Retorna el ID del producto con ese handle, o None."""
+    try:
+        r = _shopify_request("GET", f"products.json?handle={handle}&fields=id")
+        prods = r.get("products", [])
+        return prods[0]["id"] if prods else None
+    except Exception as e:
+        print(f"  Shopify buscar handle '{handle}': {e}")
+        return None
+
+
+def _shopify_buscar_por_titulo(titulo):
+    """Retorna el primer producto con ese título exacto (case-insensitive), o None."""
+    try:
+        titulo_enc = urllib.parse.quote(titulo)
+        r = _shopify_request("GET", f"products.json?title={titulo_enc}&fields=id,title,status,variants")
+        for p in r.get("products", []):
+            if p["title"].strip().lower() == titulo.strip().lower():
+                return p
+        return None
+    except Exception as e:
+        print(f"  Shopify buscar titulo '{titulo}': {e}")
+        return None
+
+
+def crear_en_shopify(nombre, producto_dir, colores, precio, output_dir, procesar_data=None):
+    if procesar_data is None:
+        procesar_data = {}
     ids_path = producto_dir / "shopify_ids.json"
-    if ids_path.exists():
-        print("  Shopify: ya publicado, saltando")
-        return
+
+    # ── Descripción ──────────────────────────────────────────────────────────
     desc_raw = open(producto_dir / "descripcion_shopify.txt", encoding="utf-8").read()
     m_html   = re.search(
         r'DESCRIPCION(?:\s+HTML)?:\n(.+?)(?=\nDETALLES TECNICOS:|\nCARACTERISTICAS:|\Z)',
@@ -1320,96 +1388,256 @@ def crear_en_shopify(nombre, producto_dir, colores, precio, output_dir):
     )
     raw_desc = m_html.group(1).strip() if m_html else ""
     html     = _md_to_html(raw_desc) if raw_desc and not raw_desc.strip().startswith('<') else raw_desc
-    ids  = {"maestro": None, "individuales": {}}
+    m_precio = re.search(r'^PRECIO:\s*(\d+)', desc_raw, re.MULTILINE)
+    if m_precio:
+        precio = m_precio.group(1)
 
-    print("  Shopify: creando producto maestro...")
-    variantes = [
-        {"option1": c.capitalize(), "option2": t, "price": precio, "inventory_management": None}
-        for c in colores for t in SHOPIFY_TALLAS
-    ]
-    res_maestro = _shopify_request("POST", "products.json", {"product": {
-        "title": nombre, "body_html": html, "status": "draft",
-        "tags": f"DEKO MODA, {nombre}, cuero",
-        "options": [{"name": "Color"}, {"name": "Talla"}],
-        "variants": variantes,
-    }})
-    maestro    = res_maestro["product"]
-    maestro_id = maestro["id"]
-    ids["maestro"] = maestro_id
-    print(f"  Shopify: maestro ID {maestro_id} ({len(maestro['variants'])} variantes)")
+    # ── Tallas, tags ─────────────────────────────────────────────────────────
+    info_local   = leer_info_txt(producto_dir)
+    tallas_raw   = procesar_data.get("tallas") or info_local.get("tallas", "")
+    tallas       = _parse_tallas(tallas_raw) if tallas_raw else SHOPIFY_TALLAS
+    tipo_calzado = info_local.get("tipo_calzado", "calzado")
+    proveedor    = info_local.get("proveedor", "DEKO MODA")
+    cordon_val   = procesar_data.get("cordon", "").lower().strip()
+    tag_cordon   = "con cordon" if cordon_val in ("si", "sí", "s", "yes") else "sin cordon"
+    tags_base    = f"DEKO MODA, {nombre}, {tipo_calzado}, {tag_cordon}, {proveedor}"
+    sku_nom        = nombre.replace(" ", "").upper()
+    handle_maestro = nombre.lower().replace(" ", "-")
+    dias_activo    = int(procesar_data.get("dias_activo", 10))
+    fecha_pub      = _date.today().isoformat()
 
-    variantes_por_color = {}
-    for v in maestro["variants"]:
-        variantes_por_color.setdefault(v["option1"].upper(), []).append(v["id"])
-
-    print("  Shopify: creando productos individuales...")
-    for color in colores:
-        res = _shopify_request("POST", "products.json", {"product": {
-            "title": f"{nombre} - {color.capitalize()}",
-            "body_html": html, "status": "draft",
-            "tags": f"DEKO MODA, {nombre}, {color.capitalize()}, cuero",
-            "options": [{"name": "Talla"}],
-            "variants": [{"option1": t, "price": precio, "inventory_management": None}
-                         for t in SHOPIFY_TALLAS],
-        }})
-        pid = res["product"]["id"]
-        ids["individuales"][color] = pid
-        print(f"    [{color}] ID {pid}")
-
-    print("  Shopify: borrando imagenes existentes...")
-    _shopify_borrar_imagenes(maestro_id)
-    for ind_id_del in ids["individuales"].values():
-        _shopify_borrar_imagenes(ind_id_del)
-
-    print("  Shopify: subiendo imagenes...")
-    for color in colores:
-        alt_txt = f"{nombre} {color.capitalize()}"
-        ind_id  = ids["individuales"].get(color)
-        vids    = variantes_por_color.get(color.upper(), [])
-
-        # Orden: web_lateral (variant_ids), web_diagonal, close, cuerpo — los demás sin variant_ids
-        lateral_name   = f"{nombre}_{color}_web_lateral.jpg".lower()
-        imagenes_color = []
-        for sufijo in ("_web_lateral", "_web_diagonal"):
-            p = output_dir / f"{nombre}_{color}{sufijo}.jpg"
-            if p.exists():
-                imagenes_color.append(p)
-        for f in sorted(output_dir.iterdir()):
-            if re.match(rf'^{re.escape(nombre)}_{re.escape(color)}_\d+_close\.jpg$', f.name, re.IGNORECASE):
-                imagenes_color.append(f)
-        for f in sorted(output_dir.iterdir()):
-            if re.match(rf'^{re.escape(nombre)}_{re.escape(color)}_\d+\.jpg$', f.name, re.IGNORECASE):
-                imagenes_color.append(f)
-
-        for img in imagenes_color:
-            img_vids = vids if img.name.lower() == lateral_name else None
+    # ── Buscar maestro existente ──────────────────────────────────────────────
+    maestro_existente = None
+    if ids_path.exists():
+        ids_stored = json.loads(ids_path.read_text(encoding="utf-8"))
+        mid = ids_stored.get("shopify_id_maestro") or ids_stored.get("maestro")
+        if mid:
             try:
-                if ind_id:
-                    _shopify_subir_imagen(ind_id, img, alt=f"{alt_txt} — {img.stem}", variant_ids=None)
-                _shopify_subir_imagen(maestro_id, img, alt=f"{alt_txt} — {img.stem}", variant_ids=img_vids)
-                print(f"    [{color}] {img.name} OK")
-            except RuntimeError as e:
-                print(f"    [{color}] ERROR {img.name}: {e}")
+                maestro_existente = _shopify_request(
+                    "GET", f"products/{mid}.json?fields=id,title,status,variants"
+                )["product"]
+            except RuntimeError:
+                pass
+    if maestro_existente is None:
+        maestro_existente = _shopify_buscar_por_titulo(nombre)
 
-    # Collage al final — individuales + maestro con todos los variant_ids
+    # ── ESCENARIO C: borrador → reactivar ─────────────────────────────────────
+    if maestro_existente and maestro_existente.get("status") == "draft":
+        maestro_id = maestro_existente["id"]
+        print(f"  Shopify: ESCENARIO C — reactivando producto borrador {maestro_id}...")
+        _shopify_request("PUT", f"products/{maestro_id}.json",
+                         {"product": {"id": maestro_id, "status": "active"}})
+        colores_en_maestro = sorted({(v.get("option1") or "").upper()
+                                     for v in maestro_existente.get("variants", [])})
+        ids_new = {
+            "fecha_publicacion":  fecha_pub,
+            "dias_activo":        dias_activo,
+            "activo":             True,
+            "shopify_id_maestro": maestro_id,
+            "colores":            colores_en_maestro,
+        }
+        ids_path.write_text(json.dumps(ids_new, indent=2), encoding="utf-8")
+        print(f"  Shopify: ESCENARIO C completado — {maestro_id}")
+        return
+
+    # ── PRODUCTO NUEVO ────────────────────────────────────────────────────────
+    if maestro_existente is None:
+        print("  Shopify: creando producto maestro...")
+        variantes_maestro = [
+            {"option1": c.capitalize(), "option2": t,
+             "price": precio, "compare_at_price": precio,
+             "sku": f"{sku_nom}m{c[:2].upper()}{t}", "inventory_management": None}
+            for c in colores for t in tallas
+        ]
+        try:
+            res_maestro = _shopify_request("POST", "products.json", {"product": {
+                "title": nombre, "body_html": html, "status": "active",
+                "tags": tags_base,
+                "options": [{"name": "Color"}, {"name": "Talla"}],
+                "variants": variantes_maestro,
+            }})
+            maestro    = res_maestro["product"]
+            maestro_id = maestro["id"]
+        except RuntimeError as e:
+            if "422" in str(e) and "handle" in str(e).lower():
+                print(f"  Handle '{handle_maestro}' ya existe — recuperando ID...")
+                maestro_id = _shopify_buscar_por_handle(handle_maestro)
+                if not maestro_id:
+                    raise
+                maestro = _shopify_request(
+                    "GET", f"products/{maestro_id}.json?fields=id,variants")["product"]
+            else:
+                raise
+        print(f"  Shopify: maestro ID {maestro_id}")
+
+        variantes_por_color = {}
+        for v in maestro.get("variants", []):
+            variantes_por_color.setdefault((v.get("option1") or "").upper(), []).append(v["id"])
+
+        print("  Shopify: creando productos individuales...")
+        for color in colores:
+            handle_ind = f"{handle_maestro}-{color.lower()}"
+            ind_id_ex  = _shopify_buscar_por_handle(handle_ind)
+            if ind_id_ex:
+                print(f"    [{color}] individual ya existe — saltando creacion")
+                ind_product = _shopify_request(
+                    "GET", f"products/{ind_id_ex}.json?fields=id,variants")["product"]
+            else:
+                variantes_ind = [
+                    {"option1": color.capitalize(), "option2": t,
+                     "price": precio, "compare_at_price": precio,
+                     "sku": f"{sku_nom}{color[:2].upper()}{t}", "inventory_management": None}
+                    for t in tallas
+                ]
+                try:
+                    res = _shopify_request("POST", "products.json", {"product": {
+                        "title": f"{nombre} - {color.capitalize()}",
+                        "body_html": html, "status": "active",
+                        "tags": f"{tags_base}, {color.capitalize()}",
+                        "options": [{"name": "Color"}, {"name": "Talla"}],
+                        "variants": variantes_ind,
+                    }})
+                    ind_product = res["product"]
+                except RuntimeError as e:
+                    if "422" in str(e) and "handle" in str(e).lower():
+                        pid_ex = _shopify_buscar_por_handle(handle_ind)
+                        if not pid_ex:
+                            raise
+                        ind_product = _shopify_request(
+                            "GET", f"products/{pid_ex}.json?fields=id,variants")["product"]
+                    else:
+                        raise
+                print(f"    [{color}] ID {ind_product['id']}")
+
+            vids_ind = [v["id"] for v in ind_product.get("variants", [])]
+            _shopify_subir_imagenes_color(
+                ind_product["id"], nombre, color, output_dir,
+                f"{nombre} {color.capitalize()}", variant_ids=vids_ind)
+
+        print("  Shopify: subiendo imagenes al maestro...")
+        for color in colores:
+            vids = variantes_por_color.get(color.upper(), [])
+            _shopify_subir_imagenes_color(maestro_id, nombre, color, output_dir,
+                                          f"{nombre} {color.capitalize()}", variant_ids=vids)
+
+        collage = output_dir / f"{nombre}_collage.jpg"
+        if collage.exists():
+            try:
+                _shopify_subir_imagen(maestro_id, collage, alt=f"{nombre} collage")
+                print(f"  Collage subido al maestro OK")
+            except RuntimeError as e:
+                print(f"  ERROR collage maestro: {e}")
+
+        ids_new = {
+            "fecha_publicacion":  fecha_pub,
+            "dias_activo":        dias_activo,
+            "activo":             True,
+            "shopify_id_maestro": maestro_id,
+            "colores":            sorted(c.upper() for c in colores),
+        }
+        ids_path.write_text(json.dumps(ids_new, indent=2), encoding="utf-8")
+
+        _mf_writes = [
+            ("fecha_pub",   fecha_pub,        "single_line_text_field"),
+            ("dias_activo", str(dias_activo), "number_integer"),
+            ("activo",      "true",           "single_line_text_field"),
+        ]
+        for key, value, type_ in _mf_writes:
+            try:
+                _shopify_request("POST", f"products/{maestro_id}/metafields.json", {
+                    "metafield": {"namespace": "deko", "key": key, "value": value, "type": type_}
+                })
+            except RuntimeError:
+                pass
+
+        print(f"  Shopify: completado — maestro {maestro_id}")
+        print(f"  https://{SHOPIFY_SHOP}.myshopify.com/admin/products/{maestro_id}")
+        return
+
+    # ── ESCENARIOS A / B: maestro activo ya existe ────────────────────────────
+    maestro_id = maestro_existente["id"]
+    colores_en_maestro = {(v.get("option1") or "").upper()
+                          for v in maestro_existente.get("variants", [])}
+    variantes_por_color = {}
+    for v in maestro_existente.get("variants", []):
+        variantes_por_color.setdefault((v.get("option1") or "").upper(), []).append(v["id"])
+
+    colores_esc_a = [c for c in colores if c.upper() in colores_en_maestro]
+    colores_esc_b = [c for c in colores if c.upper() not in colores_en_maestro]
+
+    if colores_esc_a:
+        print(f"  Shopify: ESCENARIO A — colores ya presentes (ignorados): {colores_esc_a}")
+    if not colores_esc_b:
+        print("  Shopify: todos los colores ya existen — nada que hacer")
+        return
+
+    for color in colores_esc_b:
+        print(f"  Shopify: ESCENARIO B — nuevo color {color}...")
+        variantes_nuevas = [
+            {"option1": color.capitalize(), "option2": t,
+             "price": precio, "compare_at_price": precio,
+             "sku": f"{sku_nom}m{color[:2].upper()}{t}", "inventory_management": None}
+            for t in tallas
+        ]
+        new_vids = []
+        for v_payload in variantes_nuevas:
+            try:
+                r = _shopify_request("POST", f"products/{maestro_id}/variants.json",
+                                     {"variant": v_payload})
+                new_vids.append(r["variant"]["id"])
+            except RuntimeError as e:
+                print(f"    [WARN] variante {v_payload.get('option2', '')}: {e}")
+        variantes_por_color[color.upper()] = new_vids
+
+        _shopify_subir_imagenes_color(maestro_id, nombre, color, output_dir,
+                                      f"{nombre} {color.capitalize()}", variant_ids=new_vids)
+
+        handle_ind = f"{handle_maestro}-{color.lower()}"
+        ind_id_ex  = _shopify_buscar_por_handle(handle_ind)
+        if ind_id_ex:
+            print(f"    [{color}] individual ya existe ID {ind_id_ex} — saltando")
+        else:
+            variantes_ind = [
+                {"option1": color.capitalize(), "option2": t,
+                 "price": precio, "compare_at_price": precio,
+                 "sku": f"{sku_nom}{color[:2].upper()}{t}", "inventory_management": None}
+                for t in tallas
+            ]
+            try:
+                res_ind     = _shopify_request("POST", "products.json", {"product": {
+                    "title": f"{nombre} - {color.capitalize()}",
+                    "body_html": html, "status": "active",
+                    "tags": f"{tags_base}, {color.capitalize()}",
+                    "options": [{"name": "Color"}, {"name": "Talla"}],
+                    "variants": variantes_ind,
+                }})
+                ind_product = res_ind["product"]
+                ind_id      = ind_product["id"]
+                vids_ind    = [v["id"] for v in ind_product.get("variants", [])]
+                _shopify_subir_imagenes_color(ind_id, nombre, color, output_dir,
+                                              f"{nombre} {color.capitalize()}", variant_ids=vids_ind)
+                print(f"    [{color}] individual creado ID {ind_id}")
+            except RuntimeError as e:
+                print(f"    [{color}] ERROR creando individual: {e}")
+
     collage = output_dir / f"{nombre}_collage.jpg"
     if collage.exists():
-        for color, cid in ids["individuales"].items():
-            try:
-                _shopify_subir_imagen(cid, collage, alt=f"{nombre} collage")
-                print(f"  Collage subido a [{color}] individual OK")
-            except RuntimeError as e:
-                print(f"  ERROR collage [{color}] individual: {e}")
-        all_vids = [vid for vids in variantes_por_color.values() for vid in vids]
         try:
-            _shopify_subir_imagen(maestro_id, collage, alt=f"{nombre} collage",
-                                  variant_ids=all_vids if all_vids else None)
+            _shopify_subir_imagen(maestro_id, collage, alt=f"{nombre} collage")
             print(f"  Collage subido al maestro OK")
         except RuntimeError as e:
             print(f"  ERROR collage maestro: {e}")
 
-    ids_path.write_text(json.dumps(ids, indent=2), encoding="utf-8")
-    print(f"  Shopify: IDs guardados — maestro {maestro_id}")
+    todos_colores = sorted(colores_en_maestro | {c.upper() for c in colores_esc_b})
+    ids_new = {
+        "fecha_publicacion":  fecha_pub,
+        "dias_activo":        dias_activo,
+        "activo":             True,
+        "shopify_id_maestro": maestro_id,
+        "colores":            todos_colores,
+    }
+    ids_path.write_text(json.dumps(ids_new, indent=2), encoding="utf-8")
+    print(f"  Shopify: ESCENARIO B completado — maestro {maestro_id}, {len(colores_esc_b)} colores nuevos")
 
 
 # ── Procesamiento principal ───────────────────────────────────────────────────
@@ -1551,7 +1779,7 @@ def procesar_producto(producto_dir):
                               for c in colores_todos)
                 if desc_ok and web_ok:
                     try:
-                        crear_en_shopify(nombre, producto_dir, colores_todos, precio_shopify, output_dir)
+                        crear_en_shopify(nombre, producto_dir, colores_todos, precio_shopify, output_dir, procesar_data)
                     except RuntimeError as e:
                         print(f"  Shopify ERROR: {e}")
                         _telegram_error(nombre, f"Shopify: {e}")
@@ -1601,7 +1829,7 @@ def procesar_producto(producto_dir):
                               for c in colores_todos)
                 if desc_ok and web_ok:
                     try:
-                        crear_en_shopify(nombre, producto_dir, colores_todos, precio_shopify, output_dir)
+                        crear_en_shopify(nombre, producto_dir, colores_todos, precio_shopify, output_dir, procesar_data)
                     except RuntimeError as e:
                         print(f"  Shopify ERROR: {e}")
                         _telegram_error(nombre, f"Shopify: {e}")
