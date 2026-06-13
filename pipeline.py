@@ -459,7 +459,13 @@ def _estimar_cobertura_zapato(img):
     total = (h // 3) * (w // 3)
     return count / total if total > 0 else 0
 
-def _encontrar_zapato_original(producto_dir, color):
+def _encontrar_zapato_original(producto_dir, color, nombre=None):
+    if nombre:
+        pat = re.compile(
+            rf'^{re.escape(nombre)}_{re.escape(color)}_\d+\.(jpg|jpeg|png)$', re.IGNORECASE)
+        for f in sorted(producto_dir.iterdir()):
+            if pat.match(f.name):
+                return f
     patron = re.compile(rf'^{re.escape(color)}_\d+\.(jpg|jpeg|png)$', re.IGNORECASE)
     for f in sorted(producto_dir.iterdir()):
         if patron.match(f.name):
@@ -481,12 +487,12 @@ def _verificar_consistencia_close(imagenes, producto_dir, nombre, output_dir):
         print(f"  Cobertura {img_path.name}: {cob:.3f} (promedio: {promedio:.3f})")
         if cob < umbral:
             print(f"  REGENERANDO {img_path.name} (cobertura baja)")
-            m = re.search(rf'^{re.escape(nombre)}_([A-Za-z]+)_(\d+)_close\.jpg$',
+            m = re.search(rf'^{re.escape(nombre)}_(.+)_(\d+)_close\.jpg$',
                           img_path.name, re.IGNORECASE)
             if not m:
                 continue
             color      = m.group(1).upper()
-            zapato_path = _encontrar_zapato_original(producto_dir, color)
+            zapato_path = _encontrar_zapato_original(producto_dir, color, nombre)
             if not zapato_path:
                 continue
             zapato_img = PIL.Image.open(zapato_path)
@@ -508,7 +514,7 @@ def _verificar_consistencia_close(imagenes, producto_dir, nombre, output_dir):
     return imagenes
 
 def generar_collage(nombre, output_dir, producto_dir=None):
-    patron   = re.compile(rf'^{re.escape(nombre)}_([A-Za-z]+)_\d+_close(?:_REVISAR)?\.jpg$', re.IGNORECASE)
+    patron   = re.compile(rf'^{re.escape(nombre)}_(.+)_\d+_close(?:_REVISAR)?\.jpg$', re.IGNORECASE)
     por_color = {}
     for f in sorted(output_dir.iterdir()):
         m = patron.match(f.name)
@@ -594,7 +600,7 @@ def _copiar_imagenes_centrales(nombre, output_dir):
     dir_collage.mkdir(exist_ok=True)
 
     patron = re.compile(
-        rf'^{re.escape(nombre)}_([A-Za-z][A-Za-z0-9_]*)_\d+_close(?:_REVISAR)?\.jpg$',
+        rf'^{re.escape(nombre)}_(.+)_\d+_close(?:_REVISAR)?\.jpg$',
         re.IGNORECASE
     )
     por_color = {}
@@ -623,7 +629,7 @@ def generar_historia(nombre, output_dir):
     if output.exists():
         print(f"  Historia: ya existe, saltando")
         return output
-    patron = re.compile(rf'^{re.escape(nombre)}_([A-Za-z][A-Za-z0-9_]*)_web_lateral\.jpg$', re.IGNORECASE)
+    patron = re.compile(rf'^{re.escape(nombre)}_(.+)_web_lateral\.jpg$', re.IGNORECASE)
     por_color = {}
     for f in sorted(output_dir.iterdir()):
         m = patron.match(f.name)
@@ -788,15 +794,21 @@ def _generar_variante_web(prompt, zapato_img, archivo_original, output_dir, nomb
 
 def generar_web(nombre, producto_dir, output_dir):
     print("\n  Generando imagenes web (fondo blanco)...")
-    patron = re.compile(r'^([A-Za-z]+)_1\.(png|jpg|jpeg)$', re.IGNORECASE)
-    colores_1 = sorted(
-        [(m.group(1).upper(), f)
-         for f in producto_dir.iterdir()
-         if (m := patron.match(f.name))],
-        key=lambda x: x[0]
-    )
+    _excl_web = {"referencia", "referencia_pinterest", nombre.lower()}
+    _pat_web_nuevo = re.compile(rf'^{re.escape(nombre)}_(.+)_1\.(png|jpg|jpeg)$', re.IGNORECASE)
+    _pat_web_viejo = re.compile(r'^([A-Za-z][A-Za-z0-9 ]*)_1\.(png|jpg|jpeg)$', re.IGNORECASE)
+    colores_1 = []
+    for f in producto_dir.iterdir():
+        m = _pat_web_nuevo.match(f.name)
+        if m:
+            colores_1.append((m.group(1).strip().upper(), f))
+            continue
+        m = _pat_web_viejo.match(f.name)
+        if m and m.group(1).strip().lower() not in _excl_web:
+            colores_1.append((m.group(1).strip().upper(), f))
+    colores_1.sort(key=lambda x: x[0])
     if not colores_1:
-        print("  Web: no se encontraron archivos COLOR_1")
+        print("  Web: no se encontraron archivos de colores")
         return
     for color, archivo in colores_1:
         print(f"\n  --- Web {color} ---")
@@ -1155,7 +1167,7 @@ def _enviar_notificacion_telegram(nombre, producto_dir, precio_raw, colores_todo
 
     try:
         # MENSAJE 1: álbum con todas las _close + URL Shopify
-        patron_close   = re.compile(rf'^{re.escape(nombre)}_([A-Za-z][A-Za-z0-9_]*)_\d+_close(?:_REVISAR)?\.jpg$', re.IGNORECASE)
+        patron_close   = re.compile(rf'^{re.escape(nombre)}_(.+)_\d+_close(?:_REVISAR)?\.jpg$', re.IGNORECASE)
         imagenes_close = sorted(p for p in output_dir.iterdir() if patron_close.match(p.name))
         print(f"  Imágenes _close encontradas: {len(imagenes_close)}")
         lineas_album   = [
@@ -1199,6 +1211,13 @@ def _enviar_notificacion_telegram(nombre, producto_dir, precio_raw, colores_todo
 def esperar_respuesta_telegram(timeout=1800):
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT:
         print("  Telegram: no configurado — continuando automaticamente (SI)")
+        return "SI"
+    if EN_RAILWAY:
+        print("  Railway/webhook activo — continuando automaticamente (SI)")
+        _telegram_send(
+            "⚙️ Modo Railway: continuando con FASE 2 automaticamente\n"
+            "(getUpdates no disponible con webhook activo)"
+        )
         return "SI"
     url_updates = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates"
     offset = None
@@ -1675,18 +1694,35 @@ def procesar_producto(producto_dir):
     output_dir = producto_dir / "imagenes_generadas"
     output_dir.mkdir(exist_ok=True)
 
-    patron = re.compile(r'^([A-Za-z]+)_(\d+)\.(png|jpg|jpeg)$', re.IGNORECASE)
-    archivos = sorted(
-        [(m.group(1).upper(), m.group(2), f)
-         for f in producto_dir.iterdir()
-         if (m := patron.match(f.name))],
-        key=lambda x: (x[0], x[1])
-    )
+    _excl_scan    = {"referencia", "referencia_pinterest", nombre.lower()}
+    _pat_nuevo    = re.compile(rf'^{re.escape(nombre)}_(.+)_(\d+)\.(png|jpg|jpeg)$', re.IGNORECASE)
+    _pat_viejo    = re.compile(r'^([A-Za-z][A-Za-z0-9 ]*)_(\d+)\.(png|jpg|jpeg)$', re.IGNORECASE)
+    archivos = []
+    for _f in producto_dir.iterdir():
+        _m = _pat_nuevo.match(_f.name)
+        if _m:
+            archivos.append((_m.group(1).strip().upper(), _m.group(2), _f))
+            continue
+        _m = _pat_viejo.match(_f.name)
+        if _m and _m.group(1).strip().lower() not in _excl_scan:
+            archivos.append((_m.group(1).strip().upper(), _m.group(2), _f))
+    archivos.sort(key=lambda x: (x[0], x[1]))
     colores_todos  = sorted(set(c for c, _, _ in archivos))
     faltantes      = [(c, n, f) for c, n, f in archivos
                       if not (output_dir / f"{nombre}_{c}_{n}_close.jpg").exists()
                       and not (output_dir / f"{nombre}_{c}_{n}_close_REVISAR.jpg").exists()]
     colores_nuevos = sorted(set(c for c, _, _ in faltantes))
+
+    if not colores_todos and not any(output_dir.glob(f"{nombre}_*_close.jpg")):
+        msg = (
+            f"⚠️ {nombre}: no se encontraron fotos de colores.\n"
+            f"El bot guarda ESTILO_COLOR_1.jpg — verifica que los archivos "
+            f"estén en la carpeta y vuelve a iniciar."
+        )
+        print(msg)
+        _telegram_send(msg)
+        (producto_dir / "PROCESAR.txt").unlink(missing_ok=True)
+        return
 
     descripcion_existe = (producto_dir / "descripcion_shopify.txt").exists()
     info_completa      = all(k in leer_info_txt(producto_dir) for k in INFO_FIELDS)
@@ -1744,7 +1780,7 @@ def procesar_producto(producto_dir):
 
         # ── PAUSA: esperar SI/NO (30 min) ────────────────────────────────────
         _patron_cnt = re.compile(
-            rf'^{re.escape(nombre)}_[A-Za-z][A-Za-z0-9_]*_\d+_close(?:_REVISAR)?\.jpg$', re.IGNORECASE)
+            rf'^{re.escape(nombre)}_(.+)_\d+_close(?:_REVISAR)?\.jpg$', re.IGNORECASE)
         _n_close = sum(1 for f in output_dir.iterdir() if _patron_cnt.match(f.name))
         _telegram_send(
             f"✅ FASE 1 completa — {nombre}\n"

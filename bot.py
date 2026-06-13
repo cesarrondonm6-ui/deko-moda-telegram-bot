@@ -493,7 +493,7 @@ async def confirmar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         threading.Thread(
             target=_run_pipeline,
             args=(nombre, str(carpeta), CHAT_ID, BOT_TOKEN),
-            daemon=True,
+            daemon=False,
         ).start()
 
         await context.bot.send_message(
@@ -525,6 +525,7 @@ def _crear_procesar_txt(nombre: str, ud: dict, colores: list, carpeta: Path) -> 
         f"ocasion={ud.get('ocasion', '')}",
         f"cierre={ud.get('cierre', '')}",
         f"altura_suela={ud.get('altura_suela', '')}",
+        f"plantilla_confort=si",
         f"tallas={ud.get('tallas', '')}",
         f"dias_activo={ud.get('dias_activo', '10')}",
         f"precio={ud.get('precio', '')}",
@@ -540,7 +541,7 @@ def _run_pipeline(nombre: str, carpeta: str, chat_id: str, token: str) -> None:
             [sys.executable, str(PIPELINE_SCRIPT), nombre],
             capture_output=True,
             text=True,
-            timeout=600,
+            timeout=2700,  # 45 min: 7 colores × 3 intentos + FASE 2
         )
         if proc.stdout:
             logger.info("Pipeline stdout [%s]:\n%s", nombre, proc.stdout[:2000])
@@ -551,7 +552,7 @@ def _run_pipeline(nombre: str, carpeta: str, chat_id: str, token: str) -> None:
                 f"❌ Error en pipeline {nombre}:\n{proc.stderr[-500:]}")
     except subprocess.TimeoutExpired:
         _telegram_send(token, chat_id,
-            f"⚠️ Pipeline {nombre} excedio 10 minutos. Revisar manualmente.")
+            f"⚠️ Pipeline {nombre} excedio 45 minutos. Revisar manualmente.")
 
 
 # ── QA: seleccion de imagen (standalone, fuera del ConversationHandler) ────────
