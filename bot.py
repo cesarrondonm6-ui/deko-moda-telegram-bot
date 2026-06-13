@@ -5,6 +5,7 @@ import json
 import logging
 import subprocess
 import threading
+import unicodedata
 import urllib.request
 from pathlib import Path
 from datetime import date, timedelta
@@ -40,23 +41,23 @@ PRODUCTOS_DIR = Path(os.getenv("PRODUCTOS_DIR", "/app/data/productos"))
 PIPELINE_SCRIPT = Path("/app/pipeline.py")
 
 # ── Credenciales ───────────────────────────────────────────────────────────────
-BOT_TOKEN       = os.getenv("BOT_TOKEN")
+BOT_TOKEN         = os.getenv("BOT_TOKEN")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
-CHAT_ID         = os.getenv("CHAT_ID")
-SHOPIFY_TOKEN   = os.getenv("SHOPIFY_TOKEN")
-SHOPIFY_SHOP    = os.getenv("SHOPIFY_SHOP", "")
+CHAT_ID           = os.getenv("CHAT_ID")
+SHOPIFY_TOKEN     = os.getenv("SHOPIFY_TOKEN")
+SHOPIFY_SHOP      = os.getenv("SHOPIFY_SHOP", "")
 
-if not BOT_TOKEN:        print("BOT_TOKEN vacio")
+if not BOT_TOKEN:         print("BOT_TOKEN vacio")
 if not ANTHROPIC_API_KEY: print("ANTHROPIC_API_KEY vacio")
-if not CHAT_ID:          print("CHAT_ID vacio")
-if not SHOPIFY_TOKEN:    print("SHOPIFY_TOKEN vacio")
+if not CHAT_ID:           print("CHAT_ID vacio")
+if not SHOPIFY_TOKEN:     print("SHOPIFY_TOKEN vacio")
 
 if not (BOT_TOKEN and ANTHROPIC_API_KEY):
     raise ValueError("Faltan BOT_TOKEN o ANTHROPIC_API_KEY")
 
 # ── Estados ────────────────────────────────────────────────────────────────────
 (
-    ALBUM,
+    FOTOS,
     SPEC_LINEA,
     SPEC_TIPO,
     SPEC_MATERIAL,
@@ -83,6 +84,12 @@ def _kb(prefix: str, opciones: list, cols: int = 3) -> InlineKeyboardMarkup:
     if row:
         rows.append(row)
     return InlineKeyboardMarkup(rows)
+
+
+def _kb_listo() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("✅ Listo", callback_data="fotos_listo")]
+    ])
 
 
 def _kb_confirmar() -> InlineKeyboardMarkup:
@@ -117,135 +124,168 @@ def _telegram_send(token: str, chat_id: str, text: str) -> None:
         logger.error("_telegram_send error: %s", e)
 
 
-# ── PASO 1: Álbum ──────────────────────────────────────────────────────────────
+# ── Normalización de captions ──────────────────────────────────────────────────
+
+def _quitar_tildes(texto: str) -> str:
+    return "".join(
+        c for c in unicodedata.normalize("NFD", texto)
+        if unicodedata.category(c) != "Mn"
+    )
+
+
+def _normalizar_nombre(texto: str) -> str:
+    """Estilo: sin tildes, MAYÚSCULAS, espacios normalizados."""
+    return _quitar_tildes(" ".join(texto.split())).upper()
+
+
+def _normalizar_color(texto: str) -> str:
+    """Color: sin tildes, Title Case, espacios normalizados."""
+    return _quitar_tildes(" ".join(texto.split())).title()
+
+
+def _detectar_caption(raw: str) -> tuple:
+    """
+    Devuelve (tipo, valor_normalizado).
+    tipo: 'pin' | 'ref' | 'color' | 'vacio'
+    """
+    texto = " ".join(raw.split())   # colapsar espacios múltiples
+
+    if not texto:
+        return "vacio", ""
+
+    # PIN: cualquier capitalización de "pin"
+    if texto.upper() == "PIN":
+        return "pin", "PIN"
+
+    # REF: acepta REF:, Ref:, ref:, REF : (con espacio antes de los dos puntos)
+    m = re.match(r'^[Rr][Ee][Ff]\s*:\s*(.+)$', texto)
+    if m:
+        return "ref", _normalizar_nombre(m.group(1))
+
+    # Color: cualquier otro texto no vacío
+    return "color", _normalizar_color(texto)
+
+
+def _estado_fotos(ud: dict) -> str:
+    nombre   = ud.get("nombre")
+    foto_pin = ud.get("foto_pin")
+    colores  = ud.get("colores", {})
+
+    lineas = ["📋 Estado actual:"]
+    lineas.append(f"  Estilo     : {nombre if nombre else '—'}")
+    lineas.append(f"  Pinterest  : {'✓' if foto_pin else '—'}")
+    if colores:
+        lineas.append(f"  Colores ({len(colores)}): {', '.join(colores.keys())}")
+    else:
+        lineas.append("  Colores    : —")
+    return "\n".join(lineas)
+
+
+def _condicion_listo(ud: dict) -> bool:
+    return bool(ud.get("nombre") and ud.get("foto_pin") and ud.get("colores"))
+
+
+# ── PASO 1: Fotos una por una ──────────────────────────────────────────────────
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data.clear()
     await update.message.reply_text(
-        "Hola! Soy el bot de Deko Automatización.\n\n"
-        "Envía el álbum de fotos del producto en un solo mensaje:\n\n"
-        "  • Una foto con caption: REF: NOMBRE_ESTILO\n"
-        "  • Una foto con caption: PIN\n"
-        "  • Fotos de colores con caption: NOMBRE_COLOR (ej: NEGRO, NUDE)\n",
+        "Hola! Soy el bot de Deko Automatizacion.\n\n"
+        "Envia las fotos una por una con caption:\n\n"
+        "  REF: NOMBRE  →  nombre del estilo  (ej: REF: Lucia)\n"
+        "  PIN          →  referencia Pinterest\n"
+        "  NEGRO        →  foto de ese color  (ej: Nude, animal print)\n\n"
+        "El boton ✅ Listo aparecera cuando tengas minimo\n"
+        "1 estilo + 1 PIN + 1 color.",
         reply_markup=ReplyKeyboardRemove(),
     )
-    return ALBUM
+    return FOTOS
 
 
-async def recibir_foto_album(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+async def recibir_foto(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     msg = update.message
     if not msg.photo:
-        await msg.reply_text("Envía las fotos como álbum con los captions indicados.")
-        return ALBUM
+        await msg.reply_text("Envia una foto con caption.")
+        return FOTOS
 
-    file_id = msg.photo[-1].file_id
-    caption = (msg.caption or "").strip()
-    mg_id   = msg.media_group_id
-    ud      = context.user_data
+    file_id     = msg.photo[-1].file_id
+    caption_raw = (msg.caption or "").strip()
+    ud          = context.user_data
 
-    # Reset collection when a new media group starts
-    if mg_id and ud.get("mg_id") and ud["mg_id"] != mg_id:
-        ud["mg_fotos"] = []
-
-    ud.setdefault("mg_fotos", []).append({"file_id": file_id, "caption": caption})
-    if mg_id:
-        ud["mg_id"] = mg_id
-
-    if context.job_queue is None:
-        logger.error("job_queue es None — instala python-telegram-bot[job-queue]")
+    if not caption_raw:
         await msg.reply_text(
-            "Error de configuracion del servidor. Contacta al administrador."
+            "Esta foto no tiene caption.\n\n"
+            "Agrega:\n"
+            "  REF: NOMBRE  →  nombre del estilo\n"
+            "  PIN          →  referencia Pinterest\n"
+            "  NEGRO        →  nombre del color"
         )
-        context.user_data.clear()
-        return ConversationHandler.END
+        return FOTOS
 
-    # Cancel previous pending job and reschedule
-    job_name = f"album_{msg.chat_id}"
-    for j in context.job_queue.get_jobs_by_name(job_name):
-        j.schedule_removal()
+    tipo, valor = _detectar_caption(caption_raw)
 
-    context.job_queue.run_once(
-        _finalizar_album_job,
-        when=2.5,
-        name=job_name,
-        chat_id=msg.chat_id,
-        user_id=msg.from_user.id,
-    )
-    return ALBUM
+    if tipo == "pin":
+        ud["foto_pin"] = file_id
+        confirmacion   = "📸 Referencia Pinterest registrada"
 
+    elif tipo == "ref":
+        ud["nombre"] = valor
+        confirmacion  = f"📌 Estilo: {valor}"
 
-async def _finalizar_album_job(context: ContextTypes.DEFAULT_TYPE) -> None:
-    chat_id = context.job.chat_id
-    user_id = context.job.user_id
-    ud      = context.application.user_data.get(user_id, {})
-    fotos   = ud.get("mg_fotos", [])
+    elif tipo == "color":
+        colores_ud    = ud.setdefault("colores", {})
+        es_duplicado  = valor in colores_ud
+        colores_ud[valor] = file_id
+        confirmacion  = f"🎨 Color: {valor}"
+        if es_duplicado:
+            confirmacion += " (actualizado)"
 
-    nombre, colores, foto_pin, errores = _parsear_album(fotos)
+    else:
+        await msg.reply_text("Caption no reconocido. Usa REF:, PIN o el nombre del color.")
+        return FOTOS
 
-    if errores:
-        await context.bot.send_message(
-            chat_id=chat_id,
-            text="❌ Error en el álbum:\n"
-                 + "\n".join(f"  • {e}" for e in errores)
-                 + "\n\nEnvía el álbum de nuevo con /nuevo",
-        )
-        return
+    estado = _estado_fotos(ud)
+    listo  = _condicion_listo(ud)
 
-    ud.update(nombre=nombre, colores=colores, foto_pin=foto_pin)
+    texto = f"{confirmacion}\n\n{estado}"
 
-    await context.bot.send_message(
-        chat_id=chat_id,
-        text=_resumen_album(nombre, colores) + "\n\nToca Continuar para las especificaciones.",
-        reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("Continuar →", callback_data="album_ok")]
-        ]),
-    )
+    if listo:
+        kb = _kb_listo()
+    else:
+        kb = None
+        faltantes = []
+        if not ud.get("nombre"):
+            faltantes.append("foto REF: NOMBRE")
+        if not ud.get("foto_pin"):
+            faltantes.append("foto PIN")
+        if not ud.get("colores"):
+            faltantes.append("al menos 1 color")
+        if faltantes:
+            texto += "\n\nFalta: " + ", ".join(faltantes)
 
-
-def _parsear_album(fotos: list) -> tuple:
-    nombre   = None
-    colores  = {}
-    foto_pin = None
-    errores  = []
-
-    for foto in fotos:
-        cap_raw   = foto["caption"].strip()
-        cap_upper = cap_raw.upper()
-        fid       = foto["file_id"]
-
-        if cap_upper.startswith("REF:"):
-            nombre = cap_raw[4:].strip().upper().replace(" ", "_")
-        elif cap_upper == "PIN":
-            foto_pin = fid
-        elif cap_upper:
-            colores[cap_upper.replace(" ", "_")] = fid
-        else:
-            errores.append("Foto sin caption — agrega color, REF: o PIN")
-
-    if not nombre:
-        errores.append("Falta foto con caption  REF: NOMBRE_ESTILO")
-    if not foto_pin:
-        errores.append("Falta foto con caption  PIN  (referencia Pinterest)")
-    if not colores:
-        errores.append("Falta al menos una foto de color con su nombre en el caption")
-
-    return nombre, colores, foto_pin, errores
+    await msg.reply_text(texto, reply_markup=kb)
+    return FOTOS
 
 
-def _resumen_album(nombre: str, colores: dict) -> str:
-    return (
-        f"Album recibido\n\n"
-        f"Estilo : {nombre}\n"
-        f"Colores ({len(colores)}): {', '.join(colores.keys())}\n"
-        f"Referencia Pinterest: si"
-    )
-
-
-async def album_ok(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+async def fotos_listo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     await query.answer()
     await query.edit_message_reply_markup(reply_markup=None)
 
+    ud      = context.user_data
+    nombre  = ud.get("nombre", "?")
+    colores = ud.get("colores", {})
+
+    await context.bot.send_message(
+        chat_id=query.message.chat_id,
+        text=(
+            f"Fotos listas\n\n"
+            f"Estilo   : {nombre}\n"
+            f"Colores  : {', '.join(colores.keys())}\n"
+            f"Pinterest: ✓\n\n"
+            "Ahora selecciona las especificaciones:"
+        ),
+    )
     await context.bot.send_message(
         chat_id=query.message.chat_id,
         text="Linea del producto:",
@@ -431,11 +471,11 @@ async def confirmar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
     await query.edit_message_text("Procesando...")
 
-    ud       = context.user_data
-    nombre   = ud["nombre"]
-    colores  = ud["colores"]
-    pin_id   = ud["foto_pin"]
-    chat_id  = query.message.chat_id
+    ud      = context.user_data
+    nombre  = ud["nombre"]
+    colores = ud["colores"]
+    pin_id  = ud["foto_pin"]
+    chat_id = query.message.chat_id
 
     try:
         carpeta = PRODUCTOS_DIR / nombre
@@ -515,8 +555,6 @@ def _run_pipeline(nombre: str, carpeta: str, chat_id: str, token: str) -> None:
 
 
 # ── QA: seleccion de imagen (standalone, fuera del ConversationHandler) ────────
-# El pipeline envía las 3 versiones con _kb_qa() y escribe qa_waiting.txt.
-# Este handler escribe qa_choice.txt que el pipeline lee para continuar.
 
 async def qa_seleccion(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
@@ -686,9 +724,9 @@ def main() -> None:
             CommandHandler("nuevo", cmd_start),
         ],
         states={
-            ALBUM: [
-                MessageHandler(filters.PHOTO, recibir_foto_album),
-                CallbackQueryHandler(album_ok, pattern="^album_ok$"),
+            FOTOS: [
+                MessageHandler(filters.PHOTO, recibir_foto),
+                CallbackQueryHandler(fotos_listo, pattern="^fotos_listo$"),
             ],
             SPEC_LINEA: [
                 CallbackQueryHandler(spec_linea, pattern="^spec_linea:"),
