@@ -151,6 +151,14 @@ async def recibir_foto_album(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if mg_id:
         ud["mg_id"] = mg_id
 
+    if context.job_queue is None:
+        logger.error("job_queue es None — instala python-telegram-bot[job-queue]")
+        await msg.reply_text(
+            "Error de configuracion del servidor. Contacta al administrador."
+        )
+        context.user_data.clear()
+        return ConversationHandler.END
+
     # Cancel previous pending job and reschedule
     job_name = f"album_{msg.chat_id}"
     for j in context.job_queue.get_jobs_by_name(job_name):
