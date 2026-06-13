@@ -929,7 +929,7 @@ def generar_descripcion_shopify(nombre, referencia_path, colores, producto_dir, 
             media_type = "image/png" if ext == "png" else "image/jpeg"
             img_b64 = base64.standard_b64encode(open(referencia_path, "rb").read()).decode()
             vision_resp = claude_client.messages.create(
-                model="claude-opus-4-6", max_tokens=400,
+                model="claude-haiku-4-5-20251001", max_tokens=400,
                 messages=[{"role": "user", "content": [
                     {"type": "image", "source": {"type": "base64", "media_type": media_type, "data": img_b64}},
                     {"type": "text", "text": PROMPT_VISION_ZAPATO}
@@ -949,7 +949,7 @@ def generar_descripcion_shopify(nombre, referencia_path, colores, producto_dir, 
             colores=colores_str,
         )
         desc_resp = claude_client.messages.create(
-            model="claude-opus-4-6", max_tokens=600,
+            model="claude-haiku-4-5-20251001", max_tokens=600,
             messages=[{"role": "user", "content": prompt}]
         )
         descripcion = desc_resp.content[0].text.strip()
