@@ -363,7 +363,7 @@ def verificar_imagen(original_path, img_bytes):
     original_b64 = base64.standard_b64encode(open(original_path, "rb").read()).decode()
     generada_b64 = base64.standard_b64encode(img_bytes).decode()
     response = claude_client.messages.create(
-        model="claude-opus-4-6", max_tokens=800,
+        model="claude-haiku-4-5-20251001", max_tokens=800,
         messages=[{"role": "user", "content": [
             {"type": "image", "source": {"type": "base64", "media_type": media_type, "data": original_b64}},
             {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": generada_b64}},
@@ -379,7 +379,7 @@ def verificar_web(original_path, img_bytes):
     original_b64 = base64.standard_b64encode(open(original_path, "rb").read()).decode()
     generada_b64 = base64.standard_b64encode(img_bytes).decode()
     response = claude_client.messages.create(
-        model="claude-opus-4-6", max_tokens=500,
+        model="claude-haiku-4-5-20251001", max_tokens=500,
         messages=[{"role": "user", "content": [
             {"type": "image", "source": {"type": "base64", "media_type": media_type, "data": original_b64}},
             {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": generada_b64}},
