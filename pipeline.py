@@ -122,13 +122,15 @@ IMPORTANTE: NO describas el calzado en ningun campo. El zapato sera proporcionad
   "iluminacion": "[tipo de iluminacion, tonalidad, sombras]"
 }"""
 
-PROMPT_MAESTRO_COMBINED = """Analiza la imagen de referencia UNA SOLA VEZ y genera DOS prompts para Gemini. No repitas el analisis.
+PROMPT_MAESTRO_COMBINED = """Analiza la imagen de referencia UNA SOLA VEZ y genera DOS prompts para Gemini mas una seccion de caracteristicas del calzado. No repitas el analisis.
 
 FORMATO DE SALIDA OBLIGATORIO: usa exactamente estos separadores literales, sin markdown, sin #, sin **, sin modificaciones:
 ===PROMPT 1 — ESCENA COMPLETA===
 [contenido del prompt 1]
 ===PROMPT 2 — PLANO CERRADO EXTREMO===
-[contenido del prompt 2]
+[JSON del prompt 2]
+===ZAPATO CARACTERISTICAS===
+[JSON de caracteristicas]
 
 ===PROMPT 1 — ESCENA COMPLETA===
 
@@ -162,6 +164,16 @@ IMPORTANTE: NO describas el calzado en ningun campo. El zapato sera proporcionad
   "vestuario_visible": "[pantalon o parte inferior: color, tela, caida. NO mencionar el calzado]",
   "piso": "[tipo de piso]",
   "iluminacion": "[iluminacion]"
+}
+
+===ZAPATO CARACTERISTICAS===
+
+Analiza el calzado visible en la imagen y responde SOLO JSON sin markdown:
+{
+  "tipo_calzado": "una sola categoria: bota / botin / sandalia / baleta / mocasin / taco / plataforma / deportivo / otro",
+  "tipo_suela": "plataforma / cuna / plana / taco / taco fino / taco bloque",
+  "tipo_cierre": "sin cierre / hebilla / cremallera / elastico / lacado / velcro",
+  "detalles_decorativos": "descripcion breve de costuras texturas adornos acabados"
 }"""
 
 _PLANTILLA_CLOSE = """PROMPT PARA GENERAR IMAGEN - PLANO CERRADO EXTREMO
@@ -269,12 +281,12 @@ def analizar_referencia(referencia_path):
     return _analizar_con_prompt(referencia_path, PROMPT_MAESTRO, "cuerpo completo")
 
 def analizar_referencias(referencia_path):
-    print("  Analizando referencia (escena completa + plano cerrado — una sola llamada)...")
+    print("  Analizando referencia (escena completa + plano cerrado + zapato — una sola llamada)...")
     ext        = referencia_path.suffix.lower().replace(".", "")
     media_type = "image/png" if ext == "png" else "image/jpeg"
     img_b64    = base64.standard_b64encode(open(referencia_path, "rb").read()).decode()
     response   = claude_client.messages.create(
-        model="claude-opus-4-6", max_tokens=3000,
+        model="claude-opus-4-6", max_tokens=4000,
         messages=[{"role": "user", "content": [
             {"type": "image", "source": {"type": "base64", "media_type": media_type, "data": img_b64}},
             {"type": "text",  "text": PROMPT_MAESTRO_COMBINED}
@@ -287,7 +299,7 @@ def analizar_referencias(referencia_path):
     if len(partes) < 3:
         print("  AVISO: no se encontraron separadores en la respuesta de Claude")
     try:
-        m    = re.search(r'\{.*\}', raw2, re.DOTALL)
+        m    = re.search(r'\{.*?\}', raw2, re.DOTALL)
         data = json.loads(m.group()) if m else {}
     except (json.JSONDecodeError, AttributeError):
         data = {}
@@ -299,7 +311,19 @@ def analizar_referencias(referencia_path):
         piso=data.get("piso", ""),
         iluminacion=data.get("iluminacion", ""),
     )
-    return prompt1, prompt2
+    # Extraer caracteristicas del calzado de la tercera seccion
+    m_caract  = re.search(r'===ZAPATO CARACTERISTICAS===\s*([\s\S]*?)(?:===|$)', texto, re.IGNORECASE)
+    raw_caract = m_caract.group(1).strip() if m_caract else ""
+    try:
+        mc         = re.search(r'\{[\s\S]*\}', raw_caract)
+        zapato_data = json.loads(mc.group()) if mc else {}
+    except (json.JSONDecodeError, AttributeError):
+        zapato_data = {}
+    if zapato_data:
+        print(f"  Caracteristicas extraidas: {zapato_data.get('tipo_calzado', '?')}")
+    else:
+        print("  AVISO: no se extrajeron caracteristicas del zapato")
+    return prompt1, prompt2, zapato_data
 
 def analizar_referencia_close(referencia_path):
     raw = _analizar_con_prompt(referencia_path, PROMPT_MAESTRO_CLOSE, "plano cerrado")
@@ -1752,9 +1776,11 @@ def procesar_producto(producto_dir):
             prompt_close = open(prompt_close_path, encoding="utf-8").read()
             print("  Prompts: reutilizando existentes")
         else:
-            prompt, prompt_close = analizar_referencias(referencia)
+            prompt, prompt_close, zapato_data = analizar_referencias(referencia)
             open(prompt_path,       "w", encoding="utf-8").write(prompt)
             open(prompt_close_path, "w", encoding="utf-8").write(prompt_close)
+            if zapato_data:
+                _guardar_caracteristicas(producto_dir, zapato_data)
             print("  Prompts: generados (una sola llamada a Claude Vision)")
             _telegram_send(f"📋 Prompt _close generado para {nombre}:\n\n{prompt_close}")
 
