@@ -14,15 +14,24 @@ TELEGRAM_CHAT  = os.getenv("CHAT_ID", "")
 def _shopify_request(method, endpoint, data=None):
     url  = f"https://{SHOPIFY_SHOP}.myshopify.com/admin/api/2024-01/{endpoint}"
     body = json.dumps(data).encode() if data else None
-    req  = urllib.request.Request(url, data=body, method=method, headers={
-        "X-Shopify-Access-Token": SHOPIFY_TOKEN,
-        "Content-Type": "application/json",
-    })
-    try:
-        with urllib.request.urlopen(req, timeout=30) as r:
-            return json.loads(r.read())
-    except urllib.error.HTTPError as e:
-        raise RuntimeError(f"HTTP {e.code}: {e.read().decode()}")
+    max_reintentos = 3
+    for intento in range(max_reintentos + 1):
+        req = urllib.request.Request(url, data=body, method=method, headers={
+            "X-Shopify-Access-Token": SHOPIFY_TOKEN,
+            "Content-Type": "application/json",
+        })
+        try:
+            with urllib.request.urlopen(req, timeout=30) as r:
+                return json.loads(r.read())
+        except urllib.error.HTTPError as e:
+            if e.code == 429 and intento < max_reintentos:
+                retry_after = e.headers.get("Retry-After")
+                espera = float(retry_after) if retry_after else 2 ** (intento + 1)
+                print(f"    Rate limit (429) en {endpoint} — esperando {espera}s "
+                      f"antes de reintentar (intento {intento + 1}/{max_reintentos})...")
+                time.sleep(espera)
+                continue
+            raise RuntimeError(f"HTTP {e.code}: {e.read().decode()}")
 
 
 def _telegram_send(text):
