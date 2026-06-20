@@ -144,7 +144,7 @@ Imagen de cuerpo completo, mostrando la figura entera de la modelo desde la cabe
 Ambiente general:
 Fondo y entorno:
 Composicion de camara: Encuadre vertical, cuerpo completo desde cabeza hasta pies, perfil lateral, ambos zapatos visibles, espacio inferior amplio
-Posicion del cuerpo:
+Posicion del cuerpo: PROHIBIDO que la modelo use medias, medias veladas, pantimedias o cualquier tipo de calcetín/legging transparente. La piel de las piernas y tobillos debe estar completamente al descubierto y visible, sin ninguna prenda que la cubra.
 Vestuario visible:
 Piso:
 Iluminacion:
@@ -160,7 +160,7 @@ IMPORTANTE: NO describas el calzado en ningun campo. El zapato sera proporcionad
 {
   "ambiente_general": "[ambiente, tonalidad, atmosfera]",
   "fondo_y_entorno": "[fondo, entorno, elementos]",
-  "posicion_del_cuerpo": "[posicion de las piernas desde pantorrilla hacia abajo: postura, separacion, orientacion. NO mencionar el calzado]",
+  "posicion_del_cuerpo": "[posicion de las piernas desde pantorrilla hacia abajo: postura, separacion, orientacion. NO mencionar el calzado. PROHIBIDO que la modelo use medias, medias veladas, pantimedias o cualquier tipo de calcetín/legging transparente. La piel de las piernas y tobillos debe estar completamente al descubierto y visible, sin ninguna prenda que la cubra.]",
   "vestuario_visible": "[pantalon o parte inferior: color, tela, caida. NO mencionar el calzado]",
   "piso": "[tipo de piso]",
   "iluminacion": "[iluminacion]"
