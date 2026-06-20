@@ -1418,6 +1418,23 @@ def _shopify_buscar_por_titulo(titulo):
         return None
 
 
+def _escribir_metafields_individual(product_id, fecha_pub, dias_activo):
+    """Escribe fecha_pub/dias_activo/activo (namespace deko) — solo para productos individuales por color.
+    El maestro nunca recibe estos metafields: permanece fuera del ciclo de vigilancia."""
+    mf_writes = [
+        ("fecha_pub",   fecha_pub,        "single_line_text_field"),
+        ("dias_activo", str(dias_activo), "number_integer"),
+        ("activo",      "true",           "single_line_text_field"),
+    ]
+    for key, value, type_ in mf_writes:
+        try:
+            _shopify_request("POST", f"products/{product_id}/metafields.json", {
+                "metafield": {"namespace": "deko", "key": key, "value": value, "type": type_}
+            })
+        except RuntimeError:
+            pass
+
+
 def crear_en_shopify(nombre, producto_dir, colores, precio, output_dir, procesar_data=None):
     if procesar_data is None:
         procesar_data = {}
@@ -1539,6 +1556,7 @@ def crear_en_shopify(nombre, producto_dir, colores, precio, output_dir, procesar
                 print(f"    [{color}] ID {ind_product['id']}")
 
             vids_ind = [v["id"] for v in ind_product.get("variants", [])]
+            _escribir_metafields_individual(ind_product["id"], fecha_pub, dias_activo)
             _shopify_subir_imagenes_color(
                 ind_product["id"], nombre, color, output_dir,
                 f"{nombre} {color.capitalize()}", variant_ids=vids_ind)
@@ -1565,19 +1583,6 @@ def crear_en_shopify(nombre, producto_dir, colores, precio, output_dir, procesar
             "colores":            sorted(c.upper() for c in colores),
         }
         ids_path.write_text(json.dumps(ids_new, indent=2), encoding="utf-8")
-
-        _mf_writes = [
-            ("fecha_pub",   fecha_pub,        "single_line_text_field"),
-            ("dias_activo", str(dias_activo), "number_integer"),
-            ("activo",      "true",           "single_line_text_field"),
-        ]
-        for key, value, type_ in _mf_writes:
-            try:
-                _shopify_request("POST", f"products/{maestro_id}/metafields.json", {
-                    "metafield": {"namespace": "deko", "key": key, "value": value, "type": type_}
-                })
-            except RuntimeError:
-                pass
 
         print(f"  Shopify: completado — maestro {maestro_id}")
         print(f"  https://{SHOPIFY_SHOP}.myshopify.com/admin/products/{maestro_id}")
@@ -1642,6 +1647,7 @@ def crear_en_shopify(nombre, producto_dir, colores, precio, output_dir, procesar
                 }})
                 ind_product = res_ind["product"]
                 ind_id      = ind_product["id"]
+                _escribir_metafields_individual(ind_id, fecha_pub, dias_activo)
                 vids_ind    = [v["id"] for v in ind_product.get("variants", [])]
                 _shopify_subir_imagenes_color(ind_id, nombre, color, output_dir,
                                               f"{nombre} {color.capitalize()}", variant_ids=vids_ind)

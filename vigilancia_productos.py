@@ -78,7 +78,11 @@ def revisar_productos():
     for p in deko:
         pid   = p["id"]
         title = p["title"]
-        mfs   = _leer_metafields(pid)
+
+        if " - " not in title:
+            continue  # producto maestro (titulo sin "NOMBRE - COLOR") — nunca lo toca vigilancia
+
+        mfs = _leer_metafields(pid)
 
         if "fecha_pub" not in mfs:
             continue  # sin metafield = sin control de vigencia
