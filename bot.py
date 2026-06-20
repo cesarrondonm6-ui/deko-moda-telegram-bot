@@ -308,7 +308,8 @@ async def spec_linea(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         text="Tipo de calzado:",
         reply_markup=_kb("spec_tipo",
             ["Tenis", "Botines", "Botas", "Sandalias", "Tacones",
-             "Mocasines", "Baletas", "Alpargatas", "Plataformas", "Planas"],
+             "Mocasines", "Baletas", "Alpargatas", "Plataformas", "Planas",
+             "Canoas"],
             cols=3),
     )
     return SPEC_TIPO
