@@ -1464,24 +1464,10 @@ def crear_en_shopify(nombre, producto_dir, colores, precio, output_dir, procesar
     if maestro_existente is None:
         maestro_existente = _shopify_buscar_por_titulo(nombre)
 
-    # ── ESCENARIO C: borrador → reactivar ─────────────────────────────────────
-    if maestro_existente and maestro_existente.get("status") == "draft":
-        maestro_id = maestro_existente["id"]
-        print(f"  Shopify: ESCENARIO C — reactivando producto borrador {maestro_id}...")
-        _shopify_request("PUT", f"products/{maestro_id}.json",
-                         {"product": {"id": maestro_id, "status": "active"}})
-        colores_en_maestro = sorted({(v.get("option1") or "").upper()
-                                     for v in maestro_existente.get("variants", [])})
-        ids_new = {
-            "fecha_publicacion":  fecha_pub,
-            "dias_activo":        dias_activo,
-            "activo":             True,
-            "shopify_id_maestro": maestro_id,
-            "colores":            colores_en_maestro,
-        }
-        ids_path.write_text(json.dumps(ids_new, indent=2), encoding="utf-8")
-        print(f"  Shopify: ESCENARIO C completado — {maestro_id}")
-        return
+    # NOTA: el maestro NUNCA se reactiva automaticamente. Si esta en draft
+    # (revision manual pendiente o desactivado por vigilancia), el flujo
+    # continua mas abajo (ESCENARIOS A/B) y puede agregar colores nuevos
+    # sin tocar su status — solo el usuario lo activa desde Shopify.
 
     # ── PRODUCTO NUEVO ────────────────────────────────────────────────────────
     if maestro_existente is None:
@@ -1597,7 +1583,7 @@ def crear_en_shopify(nombre, producto_dir, colores, precio, output_dir, procesar
         print(f"  https://{SHOPIFY_SHOP}.myshopify.com/admin/products/{maestro_id}")
         return
 
-    # ── ESCENARIOS A / B: maestro activo ya existe ────────────────────────────
+    # ── ESCENARIOS A / B: maestro ya existe (activo o draft) ──────────────────
     maestro_id = maestro_existente["id"]
     colores_en_maestro = {(v.get("option1") or "").upper()
                           for v in maestro_existente.get("variants", [])}
