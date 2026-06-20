@@ -13,4 +13,4 @@ COPY . .
 
 RUN mkdir -p /app/data/productos
 
-CMD ["python", "bot.py"]
+CMD python ${RAILWAY_START_SCRIPT:-bot.py}
