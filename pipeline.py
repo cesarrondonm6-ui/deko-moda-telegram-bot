@@ -1494,7 +1494,7 @@ def crear_en_shopify(nombre, producto_dir, colores, precio, output_dir, procesar
         ]
         try:
             res_maestro = _shopify_request("POST", "products.json", {"product": {
-                "title": nombre, "body_html": html, "status": "active",
+                "title": nombre, "body_html": html, "status": "draft",
                 "tags": tags_base,
                 "options": [{"name": "Color"}, {"name": "Talla"}],
                 "variants": variantes_maestro,
