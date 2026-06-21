@@ -83,7 +83,7 @@ _gemini_calls = 0  # contador de llamadas a Gemini por producto
 
 # ── Constantes ────────────────────────────────────────────────────────────────
 SHOPIFY_TALLAS = [str(t) for t in range(35, 43)]
-INFO_FIELDS    = {"material", "altura_suela", "plantilla_confort", "ocasion", "tipo_calzado", "proveedor"}
+INFO_FIELDS    = {"material", "altura_suela", "plantilla_confort", "ocasion", "tipo_calzado", "proveedor", "precio"}
 
 COLLAGE_HEADER    = 110
 COLLAGE_TARGET_W  = 560
@@ -253,13 +253,13 @@ Datos del producto:
 - Ocasion: {ocasion}
 - Precio: ${precio}
 - Tipo de calzado: {tipo_calzado}
-- Proveedor: {proveedor}
 
 Caracteristicas del zapato (de la imagen): {caracteristicas}
 Colores disponibles: {colores}
 Tallas: 35 a 42
 
-Genera una descripcion que incluya beneficios, materiales, comodidad, ocasion de uso. Maximo 250 palabras. Optimiza para conversion."""
+Genera una descripcion que incluya beneficios, materiales, comodidad, ocasion de uso. Maximo 250 palabras. Optimiza para conversion.
+IMPORTANTE: nunca menciones el proveedor, fabricante ni marca de origen del producto — esa informacion es exclusivamente interna."""
 
 
 # ── Análisis de referencia ────────────────────────────────────────────────────
@@ -877,6 +877,10 @@ def actualizar_info_txt(producto_dir, nuevos_datos):
         "\n".join(f"{k}: {v}" for k, v in info.items()) + "\n"
     )
 
+def _obtener_precio(producto_dir, procesar_data):
+    """Precio del PROCESAR.txt actual, o el ultimo guardado en info.txt si no viene."""
+    return procesar_data.get("precio") or leer_info_txt(producto_dir).get("precio", "0")
+
 def _actualizar_precio(producto_dir, precio):
     salida = producto_dir / "descripcion_shopify.txt"
     if not salida.exists():
@@ -945,7 +949,7 @@ def generar_descripcion_shopify(nombre, referencia_path, colores, producto_dir, 
             material=material, altura_suela=altura_suela,
             plantilla_confort=plantilla_confort, ocasion=ocasion,
             precio=precio, tipo_calzado=tipo_calzado,
-            proveedor=proveedor, caracteristicas=caracteristicas,
+            caracteristicas=caracteristicas,
             colores=colores_str,
         )
         desc_resp = claude_client.messages.create(
@@ -953,6 +957,16 @@ def generar_descripcion_shopify(nombre, referencia_path, colores, producto_dir, 
             messages=[{"role": "user", "content": prompt}]
         )
         descripcion = desc_resp.content[0].text.strip()
+        # Red de seguridad: el proveedor es exclusivamente interno, nunca debe
+        # aparecer en la descripcion publica aunque el modelo lo mencione.
+        if proveedor and proveedor.lower() not in ("deko moda",):
+            for patron_prov in (proveedor, proveedor.upper(), proveedor.capitalize()):
+                descripcion = re.sub(
+                    rf'(?:\*\*?\s*)?(?:Marca|Fabricante|Proveedor)\s*:?\s*{re.escape(patron_prov)}(?:\s*\*\*?)?',
+                    "", descripcion, flags=re.IGNORECASE
+                )
+                descripcion = descripcion.replace(patron_prov, "DEKO MODA")
+            descripcion = re.sub(r'\n{3,}', '\n\n', descripcion).strip()
         lineas = [
             f"PRODUCTO: {nombre}", "=" * 60, f"PRECIO: {precio}", "",
             "DESCRIPCION:", descripcion, "",
@@ -1793,7 +1807,7 @@ def procesar_producto(producto_dir):
         _copiar_imagenes_centrales(nombre, output_dir)
 
         # ── Telegram FASE 1 ──────────────────────────────────────────────────
-        _enviar_notificacion_telegram(nombre, producto_dir, procesar_data.get("precio", ""),
+        _enviar_notificacion_telegram(nombre, producto_dir, _obtener_precio(producto_dir, procesar_data),
                                       colores_todos, tallas=procesar_data.get("tallas", ""))
 
         # ── PAUSA: esperar SI/NO (30 min) ────────────────────────────────────
@@ -1824,9 +1838,9 @@ def procesar_producto(producto_dir):
             historia_path = generar_historia(nombre, output_dir)
 
             generar_descripcion_shopify(nombre, referencia, colores_todos, producto_dir,
-                                        precio=procesar_data.get("precio", "N/D"))
+                                        precio=_obtener_precio(producto_dir, procesar_data))
 
-            precio_shopify = procesar_data.get("precio", "0")
+            precio_shopify = _obtener_precio(producto_dir, procesar_data)
             if SHOPIFY_TOKEN:
                 desc_ok = (producto_dir / "descripcion_shopify.txt").exists()
                 web_ok  = any((output_dir / f"{nombre}_{c}_web_lateral.jpg").exists()
@@ -1874,9 +1888,9 @@ def procesar_producto(producto_dir):
             historia_path = generar_historia(nombre, output_dir)
 
             generar_descripcion_shopify(nombre, referencia, colores_todos, producto_dir,
-                                        precio=procesar_data.get("precio", "N/D"))
+                                        precio=_obtener_precio(producto_dir, procesar_data))
 
-            precio_shopify = procesar_data.get("precio", "0")
+            precio_shopify = _obtener_precio(producto_dir, procesar_data)
             if SHOPIFY_TOKEN:
                 desc_ok = (producto_dir / "descripcion_shopify.txt").exists()
                 web_ok  = any((output_dir / f"{nombre}_{c}_web_lateral.jpg").exists()
@@ -1902,10 +1916,10 @@ def procesar_producto(producto_dir):
         print("  Regenerando descripcion (info actualizada)...")
         (producto_dir / "descripcion_shopify.txt").unlink()
         generar_descripcion_shopify(nombre, referencia, colores_todos, producto_dir,
-                                    precio=procesar_data.get("precio", "N/D"))
+                                    precio=_obtener_precio(producto_dir, procesar_data))
     elif not descripcion_existe and info_completa:
         generar_descripcion_shopify(nombre, referencia, colores_todos, producto_dir,
-                                    precio=procesar_data.get("precio", "N/D"))
+                                    precio=_obtener_precio(producto_dir, procesar_data))
     elif not tiene_precio:
         print("  Todo al dia, nada que procesar")
 
